@@ -23,7 +23,7 @@ public class CommonDtos {
     public record RunStepResultDto(
             String id, String stepId, int orderIndex, String status,
             boolean healed, String healedStrategy, String errorMessage, String screenshot,
-            String stepSnapshot) {}
+            String stepSnapshot, Instant startedAt, Instant locatedAt, Instant finishedAt) {}
 
     /** Liste/dashboard için hafif özet — stepResults (ve görüntüler) taşımaz. */
     public record RunSummaryDto(
@@ -48,5 +48,7 @@ public class CommonDtos {
     public record IngestStepResult(
             int orderIndex, String stepId, String status,
             boolean healed, String healedStrategy, String errorMessage, String screenshot,
-            String stepSnapshot) {}
+            String stepSnapshot,
+            /* epoch ms — eklenti Date.now() gönderir */
+            Long startedAt, Long locatedAt, Long finishedAt) {}
 }

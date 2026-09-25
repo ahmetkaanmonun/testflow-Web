@@ -83,6 +83,9 @@ public class RunController {
                 result.setErrorMessage(r.errorMessage());
                 result.setScreenshot(r.screenshot());
                 result.setStepSnapshot(r.stepSnapshot());
+                result.setStartedAt(epoch(r.startedAt()));
+                result.setLocatedAt(epoch(r.locatedAt()));
+                result.setFinishedAt(epoch(r.finishedAt()));
                 run.getStepResults().add(result);
             }
         }
@@ -115,6 +118,10 @@ public class RunController {
                 r.getStepResults().stream().map(s -> new RunStepResultDto(
                         s.getId(), s.getStepId(), s.getOrderIndex(), s.getStatus(),
                         s.isHealed(), s.getHealedStrategy(), s.getErrorMessage(), s.getScreenshot(),
-                        s.getStepSnapshot())).toList());
+                        s.getStepSnapshot(), s.getStartedAt(), s.getLocatedAt(), s.getFinishedAt())).toList());
+    }
+
+    private static Instant epoch(Long ms) {
+        return ms == null ? null : Instant.ofEpochMilli(ms);
     }
 }

@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { api } from '../lib/api';
+import { formatDateTime, formatTimeMs, formatOffset, formatDuration, diffMs } from '../lib/format';
 
 export default function Runs() {
   const [runs, setRuns] = useState([]);
@@ -202,8 +203,13 @@ export default function Runs() {
             <strong>{scenarioName(detail.scenarioId)} — adım sonuçları</strong>
             <button className="ghost" onClick={() => setDetail(null)}>Kapat</button>
           </div>
+          <div className="row muted" style={{ fontSize: 13, marginBottom: 12, gap: 20 }}>
+            <span>Başlangıç: <b>{formatDateTime(detail.startedAt)}</b></span>
+            <span>Bitiş: <b>{formatDateTime(detail.finishedAt)}</b></span>
+            <span>Toplam süre: <b>{formatDuration(diffMs(detail.startedAt, detail.finishedAt))}</b></span>
+          </div>
           <table>
-            <thead><tr><th>#</th><th>Adım</th><th>Durum</th><th>Healed</th><th>Hata</th><th>Görüntü</th></tr></thead>
+            <thead><tr><th>#</th><th>Adım</th><th>Durum</th><th>Zaman</th><th>Süre</th><th>Healed</th><th>Hata</th><th>Görüntü</th></tr></thead>
             <tbody>
               {detail.stepResults.map((s) => {
                 const label = stepLabel(s);
@@ -219,6 +225,27 @@ export default function Runs() {
                     ) : <span className="muted">adım tanımı yok (eski kayıt, senaryo silinmiş olabilir)</span>}
                   </td>
                   <td><span className={`badge ${s.status}`}>{s.status}</span></td>
+                  <td style={{ whiteSpace: 'nowrap' }}>
+                    {s.startedAt ? (
+                      <>
+                        <div title={formatDateTime(s.startedAt)}>{formatTimeMs(s.startedAt)}</div>
+                        <div className="muted" style={{ fontSize: 12 }}>{formatOffset(s.startedAt, detail.startedAt)}</div>
+                      </>
+                    ) : <span className="muted">—</span>}
+                  </td>
+                  <td style={{ whiteSpace: 'nowrap' }}>
+                    {s.startedAt && s.finishedAt ? (
+                      <>
+                        <div>{formatDuration(diffMs(s.startedAt, s.finishedAt))}</div>
+                        {s.locatedAt && (
+                          <div className="muted" style={{ fontSize: 12 }}
+                               title="Elementin ekranda bulunmasına kadar geçen süre">
+                            bekleme {formatDuration(diffMs(s.startedAt, s.locatedAt))}
+                          </div>
+                        )}
+                      </>
+                    ) : <span className="muted">—</span>}
+                  </td>
                   <td>{s.healed ? `✓ (${s.healedStrategy ?? '-'})` : '—'}</td>
                   <td className="muted">{s.errorMessage ?? '—'}</td>
                   <td>

@@ -168,11 +168,22 @@
     return { orderIndex: stepIndex, stepId: step.id ?? null, stepSnapshot: snapshotOf(step) };
   }
 
+  // Adım zamanlaması (epoch ms): startedAt = adım başladı, locatedAt = element
+  // bulundu (bekleme bitti), finishedAt = sonuç raporlandı. Click/press sonucu
+  // aksiyondan ÖNCE raporlandığı için onlarda finishedAt aksiyon anıdır.
+  let timing = { startedAt: null, locatedAt: null };
+
   // reportResult: sonucu background'a yazar (index ilerler)
   async function reportResult(stepIndex, step, result) {
     await chrome.runtime.sendMessage({
       type: 'STEP_RESULT',
-      result: { ...resultBase(stepIndex, step), ...result },
+      result: {
+        ...resultBase(stepIndex, step),
+        startedAt: timing.startedAt,
+        locatedAt: timing.locatedAt,
+        finishedAt: Date.now(),
+        ...result,
+      },
     });
   }
 
@@ -184,6 +195,7 @@
   }
 
   async function executeStep(step, stepIndex) {
+    timing = { startedAt: Date.now(), locatedAt: null };
     // Opsiyonel adım: başarısızlık koşumu kesmez, 'skipped' olarak geçilir
     // (bazı kayıtlarda alan dolu/kilitli gelir veya hiç görünmez).
     let optional = false;
@@ -219,6 +231,7 @@
       await reportResult(stepIndex, step, r);
       return r;
     }
+    timing.locatedAt = Date.now();
     const healed = found.usedIndex > 0;
     const healedStrategy = healed ? found.strategy : null;
 
