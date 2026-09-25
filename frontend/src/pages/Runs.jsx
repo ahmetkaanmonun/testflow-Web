@@ -24,22 +24,35 @@ export default function Runs() {
     } catch { /* senaryo silinmiş olabilir — adım tanımları görünmez, sorun değil */ }
   };
 
-  // Adımı insan diline çevir: aksiyon + hedef + değer
+  // Adımı insan diline çevir: aksiyon + hedef + değer.
+  // Öncelik koşum anındaki snapshot'ta (o an ne koşulduysa o); eski kayıtlarda
+  // snapshot yoksa senaryonun güncel adım tanımına düşülür.
   const stepLabel = (result) => {
-    const st = result.stepId ? detailSteps[result.stepId] : null;
-    if (!st) return null;
-    let target = '';
-    try {
-      const cands = JSON.parse(st.candidates || '[]');
-      if (cands.length) target = `${cands[0].strategy}=${String(cands[0].value).slice(0, 30)}`;
-    } catch {}
-    let value = '';
-    if (st.dataBinding) {
-      try { value = ` → 📎 ${JSON.parse(st.dataBinding).dataSetKey}`; } catch {}
-    } else if (st.value && ['fill', 'select', 'assert-text'].includes(st.action)) {
-      value = st.sensitive ? ' → ••••' : ` → "${String(st.value).slice(0, 25)}"`;
+    let snap = null;
+    if (result.stepSnapshot) {
+      try { snap = JSON.parse(result.stepSnapshot); } catch {}
     }
-    return { action: st.action, detail: `${target}${value}` };
+    if (!snap) {
+      const st = result.stepId ? detailSteps[result.stepId] : null;
+      if (!st) return null;
+      let target = null;
+      try {
+        const cands = JSON.parse(st.candidates || '[]');
+        if (cands.length) target = cands[0];
+      } catch {}
+      let bindingKey = null;
+      try { if (st.dataBinding) bindingKey = JSON.parse(st.dataBinding).dataSetKey; } catch {}
+      snap = { action: st.action, target, value: st.sensitive || bindingKey ? null : st.value,
+               dataBindingKey: bindingKey, sensitive: st.sensitive };
+    }
+    const target = snap.target ? `${snap.target.strategy}=${String(snap.target.value).slice(0, 30)}` : '';
+    let value = '';
+    if (snap.dataBindingKey) value = ` → 📎 ${snap.dataBindingKey}`;
+    else if (snap.sensitive) value = ' → ••••';
+    else if (snap.value && ['fill', 'select', 'assert-text'].includes(snap.action)) {
+      value = ` → "${String(snap.value).slice(0, 25)}"`;
+    }
+    return { action: snap.action, detail: `${target}${value}` };
   };
 
   const load = () =>
@@ -203,7 +216,7 @@ export default function Runs() {
                         <code>{label.action}</code>
                         <div className="muted" style={{ fontSize: 12, marginTop: 3 }}>{label.detail}</div>
                       </>
-                    ) : <span className="muted">adım tanımı yok (senaryo değişmiş/silinmiş olabilir)</span>}
+                    ) : <span className="muted">adım tanımı yok (eski kayıt, senaryo silinmiş olabilir)</span>}
                   </td>
                   <td><span className={`badge ${s.status}`}>{s.status}</span></td>
                   <td>{s.healed ? `✓ (${s.healedStrategy ?? '-'})` : '—'}</td>

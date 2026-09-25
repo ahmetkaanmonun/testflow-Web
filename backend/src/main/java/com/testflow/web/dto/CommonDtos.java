@@ -22,7 +22,8 @@ public class CommonDtos {
     // Run
     public record RunStepResultDto(
             String id, String stepId, int orderIndex, String status,
-            boolean healed, String healedStrategy, String errorMessage, String screenshot) {}
+            boolean healed, String healedStrategy, String errorMessage, String screenshot,
+            String stepSnapshot) {}
 
     /** Liste/dashboard için hafif özet — stepResults (ve görüntüler) taşımaz. */
     public record RunSummaryDto(
@@ -46,5 +47,6 @@ public class CommonDtos {
 
     public record IngestStepResult(
             int orderIndex, String stepId, String status,
-            boolean healed, String healedStrategy, String errorMessage, String screenshot) {}
+            boolean healed, String healedStrategy, String errorMessage, String screenshot,
+            String stepSnapshot) {}
 }

@@ -61,8 +61,9 @@ export default function ScenarioDetail() {
     const healedResults = results.filter((r) => r.healed && r.healedStrategy);
     if (healedResults.length === 0) return currentSteps;
     const patchedSteps = currentSteps.map((s) => {
+      // Kimlik varsa yalnız kimlikle eşle; sıra no. sadece id'siz (eski) sonuçlar için yedek
       const hr = healedResults.find(
-        (r) => (r.stepId && r.stepId === s.id) || r.orderIndex === s.orderIndex,
+        (r) => (r.stepId ? r.stepId === s.id : r.orderIndex === s.orderIndex),
       );
       if (!hr) return s;
       try {

@@ -140,11 +140,39 @@
   }
 
   // ---------- Adım çalıştırma ----------
+  // Koşulan adımın tanımının kopyası: senaryo sonradan değişse de geçmiş koşum okunur.
+  // Koşumdaki adımların value'su test veri setinden çözülmüş olabilir — hassas veya
+  // veri setine bağlı adımlarda değer ASLA snapshot'a yazılmaz.
+  function snapshotOf(step) {
+    let target = null;
+    let bindingKey = null;
+    try {
+      const cands = JSON.parse(step.candidates || '[]');
+      if (cands.length) target = { strategy: cands[0].strategy, value: String(cands[0].value).slice(0, 200) };
+    } catch {}
+    try { if (step.dataBinding) bindingKey = JSON.parse(step.dataBinding).dataSetKey ?? null; } catch {}
+    let meta = null;
+    try { meta = JSON.parse(step.meta || '{}'); } catch {}
+    const hideValue = step.sensitive || !!step.dataBinding;
+    return JSON.stringify({
+      action: step.action,
+      target,
+      value: hideValue ? null : (step.value ?? null),
+      dataBindingKey: bindingKey,
+      sensitive: !!step.sensitive,
+      meta,
+    });
+  }
+
+  function resultBase(stepIndex, step) {
+    return { orderIndex: stepIndex, stepId: step.id ?? null, stepSnapshot: snapshotOf(step) };
+  }
+
   // reportResult: sonucu background'a yazar (index ilerler)
   async function reportResult(stepIndex, step, result) {
     await chrome.runtime.sendMessage({
       type: 'STEP_RESULT',
-      result: { orderIndex: stepIndex, stepId: step.id ?? null, ...result },
+      result: { ...resultBase(stepIndex, step), ...result },
     });
   }
 
@@ -371,7 +399,7 @@
       for (let j = index + 1; j < steps.length; j++) {
         await chrome.runtime.sendMessage({
           type: 'STEP_RESULT',
-          result: { orderIndex: j, stepId: steps[j].id ?? null, status: 'skipped', healed: false },
+          result: { ...resultBase(j, steps[j]), status: 'skipped', healed: false },
         });
       }
       break;

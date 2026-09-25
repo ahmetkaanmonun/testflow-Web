@@ -35,6 +35,15 @@ public class RunStepResult {
     @Column(columnDefinition = "TEXT")
     private String errorMessage;
 
+    /**
+     * Koşulan adımın o anki tanımının kopyası — JSON string
+     * ({action, target, value, dataBindingKey, sensitive, meta}).
+     * Senaryo sonradan değişse/silinse de geçmiş koşum okunabilir kalır.
+     * Hassas veya veri setine bağlı adımlarda değer yazılmaz.
+     */
+    @Column(columnDefinition = "TEXT")
+    private String stepSnapshot;
+
     /** Adım anındaki ekran görüntüsü — data URL (jpeg base64). */
     @Column(columnDefinition = "CLOB")
     private String screenshot;

@@ -123,21 +123,37 @@ public class ScenarioController {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Senaryo bulunamadı."));
     }
 
+    /**
+     * Adım listesini id'ye göre senkronize eder: id'si eşleşen adım yerinde güncellenir
+     * (UUID korunur), id'siz adım yeni oluşturulur, listede olmayan adım silinir.
+     * Adım kimliğinin korunması koşum geçmişinin (RunStepResult.stepId) doğru adıma
+     * bağlı kalması için şarttır — önceden her kaydetmede tüm adımlar yeni id alıyordu.
+     */
     private void applySteps(Scenario s, List<StepDto> stepDtos) {
-        s.getSteps().clear();
-        if (stepDtos == null) return;
-        for (StepDto dto : stepDtos) {
-            Step step = new Step();
-            step.setScenario(s);
-            step.setOrderIndex(dto.orderIndex());
-            step.setAction(dto.action());
-            step.setCandidates(dto.candidates());
-            step.setValue(dto.value());
-            step.setDataBinding(dto.dataBinding());
-            step.setSensitive(dto.sensitive());
-            step.setMeta(dto.meta());
-            s.getSteps().add(step);
+        java.util.Map<String, Step> existing = new java.util.HashMap<>();
+        for (Step st : s.getSteps()) existing.put(st.getId(), st);
+
+        List<Step> next = new java.util.ArrayList<>();
+        if (stepDtos != null) {
+            for (StepDto dto : stepDtos) {
+                Step step = dto.id() != null ? existing.remove(dto.id()) : null;
+                if (step == null) {
+                    step = new Step();
+                    step.setScenario(s);
+                }
+                step.setOrderIndex(dto.orderIndex());
+                step.setAction(dto.action());
+                step.setCandidates(dto.candidates());
+                step.setValue(dto.value());
+                step.setDataBinding(dto.dataBinding());
+                step.setSensitive(dto.sensitive());
+                step.setMeta(dto.meta());
+                next.add(step);
+            }
         }
+        // existing'de kalanlar artık listede yok → orphanRemoval ile silinir
+        s.getSteps().clear();
+        s.getSteps().addAll(next);
     }
 
     private ScenarioDetail toDetail(Scenario s) {
