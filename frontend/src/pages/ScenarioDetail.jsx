@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api, getUser } from '../lib/api';
+import { describeStep, autoDescribe } from '../lib/describe';
 
 const ACTIONS = ['goto', 'click', 'fill', 'select', 'upload', 'press', 'assert-text', 'assert-visible', 'wait'];
 
@@ -26,6 +27,7 @@ export default function ScenarioDetail() {
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState(null); // { current, total, results: [{setName, status}] }
   const runDoneResolver = useRef(null);
+  const [editingDesc, setEditingDesc] = useState(null); // açıklaması düzenlenen adım index'i
 
   useEffect(() => {
     Promise.all([api(`/scenarios/${id}`), api('/test-data-sets'), api('/environments'), api('/folders')])
@@ -93,6 +95,17 @@ export default function ScenarioDetail() {
 
   const updateStep = (i, patch) =>
     setSteps((prev) => prev.map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
+
+  // meta JSON'ındaki tek alanı güncelle (boş değer alanı siler)
+  const updateMeta = (i, key, value) =>
+    setSteps((prev) => prev.map((s, idx) => {
+      if (idx !== i) return s;
+      let m = {};
+      try { m = JSON.parse(s.meta || '{}'); } catch {}
+      if (value === '' || value == null || value === false) delete m[key];
+      else m[key] = value;
+      return { ...s, meta: JSON.stringify(m) };
+    }));
 
   const addStep = () =>
     setSteps((prev) => [...prev, {
@@ -381,9 +394,29 @@ export default function ScenarioDetail() {
           if (cands.length) firstCandidate = `${cands[0].strategy}=${String(cands[0].value).slice(0, 40)}`;
         } catch {}
         return (
-          <div key={i} className="card" style={{ marginBottom: 10, padding: 14 }}>
+          <div key={step.id || `new-${i}`} className="card" style={{ marginBottom: 10, padding: 14 }}>
+            <div className="row" style={{ marginBottom: 10, alignItems: 'flex-start' }}>
+              <span className="muted" style={{ width: 24, paddingTop: 2 }}>{i + 1}</span>
+              {editingDesc === i ? (
+                <input autoFocus
+                       defaultValue={(() => { try { return JSON.parse(step.meta || '{}').description || ''; } catch { return ''; } })()}
+                       placeholder={autoDescribe(step)}
+                       onBlur={(e) => { updateMeta(i, 'description', e.target.value.trim()); setEditingDesc(null); }}
+                       onKeyDown={(e) => {
+                         if (e.key === 'Enter') e.target.blur();
+                         if (e.key === 'Escape') setEditingDesc(null);
+                       }}
+                       style={{ flex: 1 }} />
+              ) : (
+                <div style={{ flex: 1, fontWeight: 500, cursor: 'text' }}
+                     title="Açıklamayı düzenlemek için tıklayın (boş bırakırsanız otomatik açıklama kullanılır)"
+                     onClick={() => setEditingDesc(i)}>
+                  {describeStep(step)} <span className="muted" style={{ fontSize: 12 }}>✎</span>
+                </div>
+              )}
+            </div>
             <div className="row">
-              <span className="muted" style={{ width: 24 }}>{i + 1}</span>
+              <span style={{ width: 24 }} />
               <select value={step.action} onChange={(e) => updateStep(i, { action: e.target.value })} style={{ width: 150 }}>
                 {ACTIONS.map((a) => <option key={a} value={a}>{a}</option>)}
               </select>

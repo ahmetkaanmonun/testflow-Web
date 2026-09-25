@@ -84,7 +84,70 @@
       /passw|sifre|şifre|secret|pin/i.test(el.id || '');
   }
 
-  async function sendStep(step) {
+  // ---------- İnsan-okunur etiket (doğal dil adım açıklaması için) ----------
+  // Etiket KAYIT ANINDA yakalanmalı: koşum dışında element ortada yoktur.
+  const clean = (t) => String(t || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+
+  function textOfIdRefs(ids) {
+    return clean(String(ids || '').split(/\s+/)
+      .map((id) => document.getElementById(id)?.innerText || '').join(' '));
+  }
+
+  function labelFor(el) {
+    if (!el || !(el instanceof Element)) return null;
+    const tag = el.tagName;
+    const isField = ['INPUT', 'SELECT', 'TEXTAREA'].includes(tag) &&
+      !['submit', 'button', 'reset', 'image'].includes(el.type);
+    const aria = clean(el.getAttribute('aria-label')) || textOfIdRefs(el.getAttribute('aria-labelledby'));
+    if (isField) {
+      // 1) <label for="id">  2) saran <label>  3) aria  4) placeholder  5) title  6) name
+      if (el.id) {
+        const lbl = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+        if (lbl && clean(lbl.innerText)) return clean(lbl.innerText);
+      }
+      const wrap = el.closest('label');
+      if (wrap) {
+        const copy = wrap.cloneNode(true);
+        copy.querySelectorAll('input, select, textarea').forEach((n) => n.remove());
+        if (clean(copy.innerText || copy.textContent)) return clean(copy.innerText || copy.textContent);
+      }
+      return aria || clean(el.placeholder) || clean(el.title) || clean(el.name) || null;
+    }
+    // Buton/link/diğer: görünen metin önce
+    const text = clean(el.innerText || (['submit', 'button', 'reset'].includes(el.type) ? el.value : ''));
+    if (text) return text;
+    const img = el.querySelector && el.querySelector('img[alt]');
+    return aria || clean(el.title) || (img && clean(img.alt)) || clean(el.name) || clean(el.id) || null;
+  }
+
+  function kindOf(el) {
+    if (!el || !(el instanceof Element)) return 'element';
+    const tag = el.tagName;
+    const type = (el.type || '').toLowerCase();
+    if (tag === 'SELECT') return 'select';
+    if (tag === 'TEXTAREA') return 'field';
+    if (tag === 'INPUT') {
+      if (['submit', 'button', 'reset', 'image'].includes(type)) return 'button';
+      if (type === 'checkbox') return 'checkbox';
+      if (type === 'radio') return 'radio';
+      if (type === 'file') return 'file';
+      return 'field';
+    }
+    if (tag === 'BUTTON' || el.getAttribute('role') === 'button') return 'button';
+    if (tag === 'A') return 'link';
+    if (el.getAttribute('role') === 'option' || tag === 'LI') return 'option';
+    return 'element';
+  }
+
+  // sendStep(step, el): el verilirse meta'ya label + elementKind eklenir
+  async function sendStep(step, el) {
+    if (el) {
+      let meta = {};
+      try { meta = JSON.parse(step.meta || '{}'); } catch {}
+      meta.label = labelFor(el);
+      meta.elementKind = kindOf(el);
+      step = { ...step, meta: JSON.stringify(meta) };
+    }
     stepCount += 1;
     updateBar();
     await chrome.runtime.sendMessage({ type: 'STEP', step });
@@ -118,7 +181,7 @@
         value: null,
         sensitive: false,
         meta: JSON.stringify({ tag: 'li', via: 'select2-fallback', url: location.href }),
-      });
+      }, li);
       return;
     }
     const opt = [...sel.options].find((o) => (o.text || '').trim() === text);
@@ -128,7 +191,7 @@
       value: opt ? opt.value : text,
       sensitive: false,
       meta: JSON.stringify({ tag: 'select', via: 'select2', optionText: text, url: location.href }),
-    });
+    }, sel);
   }
 
   // Seçim mousedown anında yakalanır: dropdown henüz açık, select'e bağlanabiliriz
@@ -155,7 +218,7 @@
         value: text || null,
         sensitive: false,
         meta: JSON.stringify({ tag: el.tagName.toLowerCase(), url: location.href, assertion: true }),
-      });
+      }, el);
       exitAssertMode();
       return;
     }
@@ -186,7 +249,7 @@
       value: null,
       sensitive: false,
       meta: JSON.stringify({ tag: el.tagName.toLowerCase(), inputType: el.type || null, url: location.href }),
-    });
+    }, el);
   }, true);
 
   // Doğrulama modunda üzerine gelinen elemanı vurgula
@@ -226,7 +289,7 @@
         value: null,
         sensitive: false,
         meta: JSON.stringify({ tag: 'input', inputType: 'file', fileName, url: location.href }),
-      });
+      }, el);
       return;
     }
 
@@ -239,9 +302,12 @@
       candidates: JSON.stringify(buildCandidates(el)),
       value: sensitive ? '***' : el.value,
       sensitive,
-      meta: JSON.stringify({ tag: el.tagName.toLowerCase(), inputType: el.type || null, url: location.href }),
+      meta: JSON.stringify({
+        tag: el.tagName.toLowerCase(), inputType: el.type || null, url: location.href,
+        ...(el.tagName === 'SELECT' && el.selectedOptions[0] ? { optionText: clean(el.selectedOptions[0].text) } : {}),
+      }),
       replacePrev,
-    });
+    }, el);
   }, true);
 
   // Tıklama olunca fill zinciri kırılır (araya tıklama girdiyse yeni fill ayrı adımdır)
@@ -258,7 +324,7 @@
     const cands = JSON.stringify(buildCandidates(el));
     const meta = JSON.stringify({ tag: el.tagName.toLowerCase(), url: location.href });
     setTimeout(() => {
-      sendStep({ action: 'press', candidates: cands, value: 'Enter', sensitive: false, meta });
+      sendStep({ action: 'press', candidates: cands, value: 'Enter', sensitive: false, meta }, el);
       lastFillKey = null;
     }, 0);
   }, true);

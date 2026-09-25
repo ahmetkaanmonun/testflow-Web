@@ -164,6 +164,32 @@
     });
   }
 
+  // Hata mesajları için adımın hedefini doğal dille an: "'Giriş Yap' butonu"
+  // (frontend/src/lib/describe.js ile aynı sözlük — eklenti oradan import edemez)
+  const KIND_NOM = { button: 'butonu', link: 'bağlantısı', field: 'alanı', file: 'dosya alanı',
+    select: 'listesi', checkbox: 'onay kutusu', radio: 'seçeneği', option: 'seçeneği', element: 'öğesi' };
+  const KIND_BARE = { button: 'Buton', link: 'Bağlantı', field: 'Alan', file: 'Dosya alanı',
+    select: 'Liste', checkbox: 'Onay kutusu', radio: 'Seçenek', option: 'Seçenek', element: 'Öğe' };
+  function targetName(step) {
+    let meta = {};
+    try { meta = JSON.parse(step.meta || '{}'); } catch {}
+    let kind = meta.elementKind;
+    if (!kind) {
+      kind = step.action === 'fill' || step.action === 'press' ? 'field'
+        : step.action === 'select' ? 'select' : step.action === 'upload' ? 'file' : 'element';
+    }
+    let label = meta.label;
+    if (!label) {
+      try {
+        const c = JSON.parse(step.candidates || '[]')[0];
+        if (c && ['aria-label', 'placeholder', 'text', 'name', 'id', 'data-testid'].includes(c.strategy)) label = c.value;
+      } catch {}
+    }
+    label = String(label || '').replace(/\s+/g, ' ').trim().slice(0, 50);
+    return label ? `'${label}' ${KIND_NOM[kind] || 'öğesi'}` : (KIND_BARE[kind] || 'Öğe');
+  }
+  const secs = (ms) => String(Math.round(ms / 100) / 10).replace('.', ',');
+
   function resultBase(stepIndex, step) {
     return { orderIndex: stepIndex, stepId: step.id ?? null, stepSnapshot: snapshotOf(step) };
   }
@@ -226,7 +252,8 @@
     const found = await findElement(candidates, validatorFor(step), timeoutMs);
     if (!found) {
       const r = { status: failStatus, healed: false,
-        errorMessage: failPrefix + 'Element bulunamadı (tüm locator adayları denendi; tür uyumsuz eşleşmeler reddedildi).',
+        errorMessage: failPrefix + `${targetName(step)} ${secs(timeoutMs)} sn içinde ekranda bulunamadı. ` +
+          '(Tüm locator adayları denendi; türü uymayan eşleşmeler reddedildi.)',
         screenshot: await captureScreenshot() };
       await reportResult(stepIndex, step, r);
       return r;
@@ -385,7 +412,7 @@
         }
         const r = { status: failStatus, healed: lastHealed, healedStrategy: lastStrategy,
                  screenshot: await captureScreenshot(),
-                 errorMessage: failPrefix + `Metin doğrulaması başarısız — beklenen: "${expected.slice(0,80)}", bulunan: "${lastActual.slice(0,80)}"` };
+                 errorMessage: failPrefix + `${targetName(step)} beklenen metni içermiyor. Beklenen: "${expected.slice(0,80)}", ekranda görünen: "${lastActual.slice(0,80)}"` };
         await reportResult(stepIndex, step, r);
         return r;
       } else {
@@ -403,7 +430,7 @@
   // ---------- Ana döngü ----------
   while (index < steps.length) {
     const step = steps[index];
-    setBar(`adım ${index + 1}/${steps.length} (${step.action})`);
+    setBar(`adım ${index + 1}/${steps.length}: ${targetName(step)} (${step.action})`);
 
     const result = await executeStep(step, index); // sonuç executeStep içinde raporlanır
 
