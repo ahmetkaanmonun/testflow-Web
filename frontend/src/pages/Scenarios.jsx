@@ -51,7 +51,8 @@ export default function Scenarios() {
         runDoneResolver.current = null;
       }
 
-      if (event.data.type === 'TESTFLOW_RECORDING_DONE') {
+      // insertContext'li kayıt mevcut senaryoya araya eklemedir — senaryo detayı işler
+      if (event.data.type === 'TESTFLOW_RECORDING_DONE' && !event.data.insertContext) {
         setRecording(false);
         const steps = (event.data.steps || []).map((s, i) => ({ ...s, orderIndex: i, dataBinding: null }));
         try {

@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api, getUser } from '../lib/api';
 import { describeStep, autoDescribe } from '../lib/describe';
-import { prepareRun, saveRun, postStartRun, resolveTimeout } from '../lib/run';
+import { prepareRun, saveRun, postStartRun, postStartRecordFrom, resolveTimeout } from '../lib/run';
 
 const ACTIONS = ['goto', 'click', 'fill', 'select', 'upload', 'press', 'assert-text', 'assert-visible', 'wait'];
 
@@ -31,6 +31,13 @@ export default function ScenarioDetail() {
   const [editingDesc, setEditingDesc] = useState(null); // açıklaması düzenlenen adım index'i
   const [timeoutSec, setTimeoutSec] = useState(''); // senaryo geneli bekleme (sn), boş = üst seviye
   const [waitStats, setWaitStats] = useState({}); // stepId -> { avgWaitMs, maxWaitMs, samples }
+  // Araya ekleme
+  const [insertMenu, setInsertMenu] = useState(null);   // menüsü açık ekleme noktası (afterIndex)
+  const [recordPanel, setRecordPanel] = useState(null); // kayıtla ekleme paneli açık nokta
+  const [recEnv, setRecEnv] = useState('');
+  const [recDataSet, setRecDataSet] = useState('');
+  const [insertState, setInsertState] = useState(null); // { kind: 'recording'|'error'|'added', ... }
+  const insertBatch = useRef(0);
 
   useEffect(() => {
     Promise.all([api(`/scenarios/${id}`), api('/test-data-sets'), api('/environments'), api('/folders')])
@@ -55,7 +62,37 @@ export default function ScenarioDetail() {
   // Koşum sonucu dinleyicisi: bekleyen promise'i çözer (sıralı koşum döngüsü bekliyor)
   useEffect(() => {
     const onMessage = (event) => {
-      if (event.source !== window || event.data?.type !== 'TESTFLOW_RUN_DONE') return;
+      if (event.source !== window || !event.data) return;
+      const { type, insertContext } = event.data;
+
+      // Araya kayıt tamamlandı: adımları ekleme noktasına yerleştir
+      if (type === 'TESTFLOW_RECORDING_DONE' && insertContext?.scenarioId === id) {
+        const recorded = (event.data.steps || []).map((st) => ({ ...st, dataBinding: null }));
+        if (recorded.length === 0) {
+          setInsertState({ kind: 'error', message: 'Kayıt bitti ama yeni adım yakalanmadı.' });
+          return;
+        }
+        insertSteps(insertContext.afterIndex, recorded);
+        return;
+      }
+      // Ön adımlar geçmedi veya pencere kapatıldı: kayda geçilmedi
+      if (type === 'TESTFLOW_RECORD_FROM_FAILED' && insertContext?.scenarioId === id) {
+        if (event.data.aborted) {
+          setInsertState({ kind: 'error', message: 'Kayıt penceresi kapatıldı — adım eklenmedi.' });
+          return;
+        }
+        const failed = (event.data.results || []).find((r) => r.status === 'failed');
+        let what = '';
+        if (failed) {
+          let snap = null;
+          try { snap = JSON.parse(failed.stepSnapshot); } catch {}
+          what = `${failed.orderIndex + 1}. adım geçmedi${snap ? ` (${describeStep(snap)})` : ''}: ${failed.errorMessage || ''}`;
+        }
+        setInsertState({ kind: 'error', message: `Ekleme noktasına ulaşılamadı, kayda geçilmedi. ${what}` });
+        return;
+      }
+
+      if (type !== 'TESTFLOW_RUN_DONE') return;
       if (runDoneResolver.current) {
         runDoneResolver.current(event.data);
         runDoneResolver.current = null;
@@ -63,7 +100,7 @@ export default function ScenarioDetail() {
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, []);
+  }, [id]);
 
   // Healing kalıcılaştırma: verilen adımlar üzerinde uygular, güncel adımları döner
   const persistHealing = async (currentSteps, results) => {
@@ -100,6 +137,48 @@ export default function ScenarioDetail() {
     .filter((e) => (action === 'upload' ? e.type === 'file' : e.type !== 'file'))
     .map((e) => e.key))];
 
+  // ---------- Araya adım ekleme ----------
+  // afterIndex = -1 → en başa. Eklenen adımlar kaydedilene kadar işaretli kalır (_batch).
+  const insertSteps = (afterIndex, newSteps) => {
+    insertBatch.current += 1;
+    const batch = insertBatch.current;
+    setSteps((prev) => {
+      const next = [...prev];
+      next.splice(afterIndex + 1, 0, ...newSteps.map((st) => ({ ...st, _batch: batch })));
+      return next.map((st, idx) => ({ ...st, orderIndex: idx }));
+    });
+    setInsertMenu(null);
+    setRecordPanel(null);
+    setInsertState({ kind: 'added', batch, count: newSteps.length, at: afterIndex + 2 });
+  };
+
+  const undoInsert = (batch) => {
+    setSteps((prev) => prev.filter((st) => st._batch !== batch).map((st, idx) => ({ ...st, orderIndex: idx })));
+    setInsertState(null);
+  };
+
+  const blankStep = (action, value = '') => ({
+    action, candidates: '[]', value, dataBinding: null, sensitive: false, meta: '{}',
+  });
+
+  // Kayıtla ekle: 1..afterIndex+1 adımlarını oynat, sonra aynı pencerede kayda geç
+  const startRecordFrom = async (afterIndex) => {
+    setError('');
+    const prefix = steps.slice(0, afterIndex + 1);
+    const environment = environments.find((en) => en.id === recEnv) || null;
+    const dataSet = recDataSet ? dataSets.find((d) => d.id === recDataSet) : null;
+    try {
+      const prepared = await prepareRun({
+        scenario: { ...scenario, startUrl: startUrl || scenario.startUrl, steps: prefix, timeoutMs: scenarioTimeoutMs() },
+        environment, dataSet, project: projects.find((p) => p.active) || null,
+      });
+      setRecordPanel(null);
+      setInsertMenu(null);
+      setInsertState({ kind: 'recording', afterIndex, prefixCount: prefix.length });
+      postStartRecordFrom(prepared, { scenarioId: id, afterIndex });
+    } catch (e) { setError(e.message); }
+  };
+
   // Senaryo geneli süre (ms) — boş/geçersizse null (ortam/proje varsayılanına düşülür)
   const scenarioTimeoutMs = () => {
     const v = parseFloat(String(timeoutSec).replace(',', '.'));
@@ -120,12 +199,6 @@ export default function ScenarioDetail() {
       return { ...s, meta: JSON.stringify(m) };
     }));
 
-  const addStep = () =>
-    setSteps((prev) => [...prev, {
-      orderIndex: prev.length, action: 'click', candidates: '[]',
-      value: '', dataBinding: null, sensitive: false, meta: '{}',
-    }]);
-
   const removeStep = (i) =>
     setSteps((prev) => prev.filter((_, idx) => idx !== i).map((s, idx) => ({ ...s, orderIndex: idx })));
 
@@ -141,7 +214,7 @@ export default function ScenarioDetail() {
   const save = async () => {
     setError('');
     try {
-      const normalized = steps.map((s, i) => ({ ...s, orderIndex: i }));
+      const normalized = steps.map(({ _batch, ...s }, i) => ({ ...s, orderIndex: i }));
       const updated = await api(`/scenarios/${id}`, {
         method: 'PATCH',
         body: JSON.stringify({
@@ -157,6 +230,7 @@ export default function ScenarioDetail() {
       setStartUrl(updated.startUrl);
       setSteps(updated.steps || []);
       setTimeoutSec(updated.timeoutMs ? String(updated.timeoutMs / 1000) : '');
+      if (insertState?.kind === 'added') setInsertState(null);
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     } catch (e) { setError(e.message); }
@@ -219,6 +293,72 @@ export default function ScenarioDetail() {
 
     setRunning(false);
     navigate('/runs');
+  };
+
+  const insertPoint = (afterIndex) => {
+    const busy = running || insertState?.kind === 'recording';
+    const prefixHasBinding = steps.slice(0, afterIndex + 1).some((st) => st.dataBinding);
+    if (recordPanel === afterIndex) {
+      return (
+        <div className="card" style={{ margin: '4px 0 10px 34px', padding: 12, borderStyle: 'dashed' }}>
+          <div style={{ fontSize: 13, marginBottom: 8 }}>
+            {afterIndex < 0
+              ? 'Başlangıç sayfası açılır ve kayıt başlar; kaydettiğiniz adımlar en başa eklenir.'
+              : `1–${afterIndex + 1}. adımlar oynatılır, ardından aynı pencerede kayıt başlar. Kaydettiğiniz adımlar ${afterIndex + 1}. adımdan sonra eklenir.`}
+          </div>
+          <div className="row" style={{ gap: 8 }}>
+            <select value={recEnv} onChange={(e) => setRecEnv(e.target.value)} style={{ width: 220 }}>
+              <option value="">Ortam: kayıttaki URL</option>
+              {environments.map((en) => <option key={en.id} value={en.id}>{en.name}</option>)}
+            </select>
+            {afterIndex >= 0 && (
+              <select value={recDataSet} onChange={(e) => setRecDataSet(e.target.value)} style={{ width: 220 }}>
+                <option value="">{prefixHasBinding ? 'Veri seti seçin…' : 'Veri seti yok'}</option>
+                {dataSets.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+              </select>
+            )}
+            <button onClick={() => startRecordFrom(afterIndex)}
+                    disabled={busy || (afterIndex >= 0 && prefixHasBinding && !recDataSet)}>
+              ⏺ Başlat
+            </button>
+            <button className="ghost" onClick={() => setRecordPanel(null)}>Vazgeç</button>
+          </div>
+          {prefixHasBinding && !recDataSet && afterIndex >= 0 && (
+            <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+              Oynatılacak adımlarda test verisine bağlı değerler var — bir veri seti seçin.
+            </div>
+          )}
+        </div>
+      );
+    }
+    if (insertMenu === afterIndex) {
+      return (
+        <div className="row" style={{ margin: '2px 0 10px 34px', gap: 6, flexWrap: 'wrap' }}>
+          <button onClick={() => { setRecordPanel(afterIndex); setInsertMenu(null); }} disabled={busy}
+                  title="Sayfada tıklama, yazma, doğrulama gibi adımları kaydederek ekle">
+            ⏺ Kayıtla ekle
+          </button>
+          <button className="ghost" onClick={() => insertSteps(afterIndex, [blankStep('wait', '2')])}>⏱ Bekleme</button>
+          <button className="ghost" onClick={() => insertSteps(afterIndex, [blankStep('goto', startUrl || scenario.startUrl)])}>
+            🌐 Adrese git
+          </button>
+          <button className="ghost" onClick={() => insertSteps(afterIndex, [blankStep('click')])}
+                  title="Locator'sız boş adım — genelde kayıtla eklemek daha doğrudur">
+            Boş adım
+          </button>
+          <button className="ghost" onClick={() => setInsertMenu(null)}>Vazgeç</button>
+        </div>
+      );
+    }
+    return (
+      <div className="insert-point" style={{ margin: '-4px 0 6px 34px' }}>
+        <button className="ghost" onClick={() => { setInsertMenu(afterIndex); setRecordPanel(null); }}
+                disabled={busy}
+                title={afterIndex < 0 ? 'En başa adım ekle' : `${afterIndex + 1}. adımdan sonra adım ekle`}>
+          ＋ {afterIndex < 0 ? 'Başa adım ekle' : 'Buraya adım ekle'}
+        </button>
+      </div>
+    );
   };
 
   if (!scenario) return <div className="muted">Yükleniyor…</div>;
@@ -370,6 +510,26 @@ export default function ScenarioDetail() {
         </div>
       )}
 
+      {insertState?.kind === 'recording' && (
+        <div className="card" style={{ marginBottom: 16, padding: 14 }}>
+          ⏺ {insertState.prefixCount > 0
+            ? `Açılan pencerede ilk ${insertState.prefixCount} adım oynatılıyor; bitince kayıt çubuğu görünecek.`
+            : 'Açılan pencerede kayıt sürüyor.'} Adımları kaydedip <b>Kaydı Bitir</b>'e basın.
+        </div>
+      )}
+      {insertState?.kind === 'added' && (
+        <div className="card row" style={{ marginBottom: 16, padding: 14, justifyContent: 'space-between' }}>
+          <span>✓ {insertState.count} adım {insertState.at}. sıraya eklendi — kalıcı olması için <b>Kaydet</b>'e basın.</span>
+          <button className="ghost" onClick={() => undoInsert(insertState.batch)}>Geri al</button>
+        </div>
+      )}
+      {insertState?.kind === 'error' && (
+        <div className="card row" style={{ marginBottom: 16, padding: 14, justifyContent: 'space-between' }}>
+          <span className="error" style={{ margin: 0 }}>{insertState.message}</span>
+          <button className="ghost" onClick={() => setInsertState(null)}>Kapat</button>
+        </div>
+      )}
+
       {progress && (
         <div className="card" style={{ marginBottom: 16, padding: 14 }}>
           <div style={{ marginBottom: progress.results.length ? 8 : 0 }}>
@@ -386,6 +546,7 @@ export default function ScenarioDetail() {
         </div>
       )}
 
+      {insertPoint(-1)}
       {steps.map((step, i) => {
         const binding = step.dataBinding ? JSON.parse(step.dataBinding) : null;
         let firstCandidate = null;
@@ -394,7 +555,11 @@ export default function ScenarioDetail() {
           if (cands.length) firstCandidate = `${cands[0].strategy}=${String(cands[0].value).slice(0, 40)}`;
         } catch {}
         return (
-          <div key={step.id || `new-${i}`} className="card" style={{ marginBottom: 10, padding: 14 }}>
+          <div key={step.id || `new-${i}`}>
+          <div className="card" style={{
+            marginBottom: 10, padding: 14,
+            ...(step._batch ? { borderColor: 'var(--accent)', boxShadow: '0 0 0 1px var(--accent)' } : {}),
+          }}>
             <div className="row" style={{ marginBottom: 10, alignItems: 'flex-start' }}>
               <span className="muted" style={{ width: 24, paddingTop: 2 }}>{i + 1}</span>
               {editingDesc === i ? (
@@ -529,10 +694,10 @@ export default function ScenarioDetail() {
               );
             })()}
           </div>
+          {insertPoint(i)}
+          </div>
         );
       })}
-
-      <button className="ghost" onClick={addStep}>+ Adım Ekle</button>
       {error && <div className="error">{error}</div>}
     </div>
   );

@@ -7,6 +7,10 @@
     response = await chrome.runtime.sendMessage({ type: 'AM_I_RECORDING' });
   } catch { return; }
   if (!response || !response.recording) return;
+  // Araya kayıtta recorder sonradan enjekte edilir; sayfa yüklenirken çalışan
+  // kopya da aynı anda "kayıttasın" cevabı alabilir — tek dinleyici kalsın.
+  if (window.__tfRecorderActive) return;
+  window.__tfRecorderActive = true;
 
   let stepCount = 0;
 

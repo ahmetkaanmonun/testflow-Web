@@ -285,6 +285,28 @@
     const failStatus = optional ? 'skipped' : 'failed';
     const failPrefix = optional ? 'Opsiyonel adım atlandı — ' : '';
 
+    // goto: adrese git — element gerektirmez. Rapor ÖNCE (navigasyon script'i öldürür);
+    // yeni sayfada player kaldığı index'ten devam eder.
+    if (step.action === 'goto') {
+      let url;
+      try { url = new URL(String(step.value || '').trim(), location.href).href; } catch {}
+      if (!url) {
+        const r = { status: failStatus, healed: false, errorMessage: failPrefix + `Geçersiz adres: "${step.value}"` };
+        await reportResult(stepIndex, step, r);
+        return r;
+      }
+      const r = { status: 'passed', healed: false, healedStrategy: null };
+      await reportResult(stepIndex, step, r);
+      const current = location.href;
+      const hashOnly = url !== current && url.split('#')[0] === current.split('#')[0];
+      if (url === current) location.reload();
+      else location.href = url;
+      // Gerçek sayfa geçişinde script ölür; o arada döngü ilerlemesin.
+      // Yalnız hash değiştiyse sayfa yenilenmez, beklemeden devam edilir.
+      if (!hashOnly) await sleep(10000);
+      return r;
+    }
+
     // wait: element gerektirmez — belirtilen saniye kadar bekle (üst sınır 60sn)
     if (step.action === 'wait') {
       const secs = Math.min(Math.max(parseFloat(step.value) || 1, 0.1), 60);
@@ -503,5 +525,6 @@
   }
 
   setBar('tamamlandı, sonuçlar gönderiliyor…');
-  await chrome.runtime.sendMessage({ type: 'PLAY_DONE' });
+  const done = await chrome.runtime.sendMessage({ type: 'PLAY_DONE' });
+  if (done && done.recording) barEl.remove(); // araya kayıt: aynı sekmede kayıt başladı
 })();

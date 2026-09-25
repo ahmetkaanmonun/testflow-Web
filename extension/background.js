@@ -21,6 +21,34 @@ async function clearSiteData(url) {
   }
 }
 
+// Temiz oturumlu hedef sekme: izin varsa gizli pencere (A), yoksa site verisi
+// temizlenmiş normal sekme (B).
+async function openCleanTab(url) {
+  try {
+    if (await chrome.extension.isAllowedIncognitoAccess()) {
+      const win = await chrome.windows.create({ url, incognito: true, focused: true });
+      return { tab: win.tabs && win.tabs[0], windowId: win.id, incognito: true };
+    }
+  } catch (e) { console.warn('Gizli pencere açılamadı, normal sekmeye düşülüyor:', e); }
+  await clearSiteData(url);
+  return { tab: await chrome.tabs.create({ url }), windowId: null, incognito: false };
+}
+
+function closeTarget(s, senderTabId) {
+  if (s.incognito && s.windowId != null) {
+    chrome.windows.remove(s.windowId).catch(() => {});
+  } else if (s.tabId != null && (senderTabId == null || senderTabId === s.tabId)) {
+    chrome.tabs.remove(s.tabId).catch(() => {});
+  }
+}
+
+async function notifyApp(s, message) {
+  try {
+    await chrome.tabs.sendMessage(s.appTabId, message);
+    await chrome.tabs.update(s.appTabId, { active: true });
+  } catch (e) { console.error('TestFlow sekmesine ulaşılamadı:', e); }
+}
+
 async function getSession() {
   const { session } = await chrome.storage.session.get('session');
   return session || null;
@@ -70,6 +98,28 @@ async function handle(msg, sender) {
     return { ok: true };
   }
 
+  // ===== ARAYA KAYIT =====
+  // Senaryonun 1..N adımları oynatılır (sayfa doğru duruma gelsin), ardından
+  // aynı sekmede kayıt başlar; kaydedilen adımlar N'den sonra eklenir.
+  // N = 0 ise doğrudan başlangıç URL'inde kayda geçilir.
+  if (msg.type === 'START_RECORD_FROM') {
+    const { tab, windowId, incognito } = await openCleanTab(msg.startUrl);
+    const base = {
+      tabId: tab.id, windowId, incognito, appTabId: sender.tab.id,
+      startUrl: msg.startUrl, insertContext: msg.insertContext,
+    };
+    if (!msg.steps || msg.steps.length === 0) {
+      await setSession({ ...base, mode: 'record', steps: [] });
+    } else {
+      await setSession({
+        ...base, mode: 'play', thenRecord: true,
+        steps: msg.steps, runConfig: msg.runConfig || {},
+        index: 0, results: [], startedAt: new Date().toISOString(),
+      });
+    }
+    return { ok: true };
+  }
+
   if (msg.type === 'AM_I_RECORDING') {
     const s = await getSession();
     return { recording: !!s && s.mode === 'record' && sender.tab && sender.tab.id === s.tabId };
@@ -93,20 +143,14 @@ async function handle(msg, sender) {
     const s = await getSession();
     if (!s || s.mode !== 'record') return { ok: false };
     await clearSession();
-    try {
-      await chrome.tabs.sendMessage(s.appTabId, {
-        type: 'RECORDING_DONE',
-        scenarioName: s.scenarioName,
-        startUrl: s.startUrl,
-        steps: s.steps,
-      });
-      await chrome.tabs.update(s.appTabId, { active: true });
-    } catch (e) { console.error('TestFlow sekmesine ulaşılamadı:', e); }
-    if (s.incognito && s.windowId != null) {
-      chrome.windows.remove(s.windowId).catch(() => {});
-    } else if (sender.tab && sender.tab.id === s.tabId) {
-      chrome.tabs.remove(s.tabId);
-    }
+    await notifyApp(s, {
+      type: 'RECORDING_DONE',
+      scenarioName: s.scenarioName,
+      startUrl: s.startUrl,
+      steps: s.steps,
+      insertContext: s.insertContext || null, // doluysa: mevcut senaryoya araya ekleme
+    });
+    closeTarget(s, sender.tab && sender.tab.id);
     return { ok: true };
   }
 
@@ -210,6 +254,28 @@ async function handle(msg, sender) {
   if (msg.type === 'PLAY_DONE') {
     const s = await getSession();
     if (!s || s.mode !== 'play') return { ok: false };
+
+    if (s.thenRecord) {
+      const failed = s.results.find((r) => r.status === 'failed');
+      if (failed) {
+        // Ön adımlar geçmedi: kayda geçilmez, arayüze nedeni bildirilir
+        await clearSession();
+        await notifyApp(s, { type: 'RECORD_FROM_FAILED', insertContext: s.insertContext, results: s.results });
+        closeTarget(s, sender.tab && sender.tab.id);
+        return { ok: true };
+      }
+      // Aynı sekmede kayda geç: oturum record moduna döner, recorder yeniden enjekte edilir
+      // (sayfa yüklenirken çalışan recorder "kayıt yok" deyip çıkmıştı)
+      await setSession({
+        mode: 'record', tabId: s.tabId, windowId: s.windowId, incognito: s.incognito,
+        appTabId: s.appTabId, startUrl: s.startUrl, insertContext: s.insertContext, steps: [],
+      });
+      try {
+        await chrome.scripting.executeScript({ target: { tabId: s.tabId }, files: ['recorder.js'] });
+      } catch (e) { console.error('Recorder enjekte edilemedi:', e); }
+      return { ok: true, recording: true };
+    }
+
     await clearSession();
     try {
       await chrome.tabs.sendMessage(s.appTabId, {
@@ -237,6 +303,15 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
   const s = await getSession();
   if (!s || s.tabId !== tabId) return;
   await clearSession();
+  if (s.insertContext) {
+    try {
+      await chrome.tabs.sendMessage(s.appTabId, {
+        type: 'RECORD_FROM_FAILED', insertContext: s.insertContext,
+        results: s.results || [], aborted: true,
+      });
+    } catch {}
+    return;
+  }
   if (s.mode === 'play') {
     try {
       await chrome.tabs.sendMessage(s.appTabId, {

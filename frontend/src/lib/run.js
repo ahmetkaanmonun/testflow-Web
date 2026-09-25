@@ -95,6 +95,14 @@ export async function saveRun({ scenarioId, environmentId = null, testDataSetId 
   return status;
 }
 
+/**
+ * Araya kayıt: 1..afterIndex+1 adımları oynatılır, sonra aynı sekmede kayıt başlar.
+ * prepared.steps yalnızca oynatılacak ön adımları içermeli.
+ */
+export function postStartRecordFrom(prepared, insertContext) {
+  window.postMessage({ type: 'TESTFLOW_START_RECORD_FROM', ...prepared, insertContext }, '*');
+}
+
 /** Eklentiye koşum başlat mesajı. */
 export function postStartRun(prepared, runContext) {
   window.postMessage({ type: 'TESTFLOW_START_RUN', ...prepared, runContext }, '*');

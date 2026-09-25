@@ -154,3 +154,13 @@ code {
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
+
+/* Adımlar arası ekleme noktası: sakin durur, üzerine gelince belirginleşir */
+.insert-point button {
+  font-size: 12px;
+  padding: 2px 10px;
+  opacity: .35;
+  transition: opacity .15s;
+}
+.insert-point button:hover,
+.insert-point button:focus-visible { opacity: 1; }
