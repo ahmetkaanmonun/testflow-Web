@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
+import { prepareRun, saveRun, postStartRun, fetchActiveProject } from '../lib/run';
 
 export default function Scenarios() {
   const [scenarios, setScenarios] = useState([]);
@@ -105,68 +106,30 @@ export default function Scenarios() {
   };
 
   // Tek senaryoyu koş, RUN_DONE bekle, sonucu kaydet — durum döner
-  const runOne = async (scenarioId) => {
+  const runOne = async (scenarioId, project) => {
     const scenario = await api(`/scenarios/${scenarioId}`);
     if (!scenario.steps?.length) throw new Error('adım yok');
-
-    let byKey = {};
-    if (batchDataSet) {
-      const set = dataSets.find((d) => d.id === batchDataSet);
-      byKey = Object.fromEntries(JSON.parse(set.entries).map((en) => [en.key, en]));
-    }
-    const steps = scenario.steps.map((s) => {
-      if (!s.dataBinding) return s;
-      const key = JSON.parse(s.dataBinding).dataSetKey;
-      const entry = byKey[key];
-      if (entry === undefined) throw new Error(`"${key}" anahtarı veri setinde yok`);
-      return { ...s, value: entry.value, ...(entry.type === 'file' ? { fileName: entry.fileName } : {}) };
-    });
-
-    let startUrl = scenario.startUrl;
-    if (batchEnv) {
-      const env = environments.find((en) => en.id === batchEnv);
-      try {
-        const u = new URL(scenario.startUrl);
-        startUrl = new URL(env.baseUrl).origin + u.pathname + u.search + u.hash;
-      } catch { startUrl = env.baseUrl; }
-    }
+    const environment = environments.find((en) => en.id === batchEnv) || null;
+    const dataSet = batchDataSet ? dataSets.find((d) => d.id === batchDataSet) : null;
+    const prepared = await prepareRun({ scenario, environment, dataSet, project });
 
     const done = new Promise((resolve) => { runDoneResolver.current = resolve; });
-    window.postMessage({
-      type: 'TESTFLOW_START_RUN',
-      startUrl,
-      steps,
-      runContext: { scenarioId, environmentId: batchEnv || null, testDataSetId: batchDataSet || null },
-    }, '*');
-
-    const result = await done;
-    const results = result.results || [];
-    const status = result.aborted || results.some((r) => r.status === 'failed') ? 'failed' : 'passed';
-    await api('/runs', {
-      method: 'POST',
-      body: JSON.stringify({
-        scenarioId,
-        environmentId: batchEnv || null,
-        testDataSetId: batchDataSet || null,
-        status,
-        startedAt: result.startedAt,
-        finishedAt: result.finishedAt,
-        stepResults: results,
-      }),
-    });
-    return status;
+    postStartRun(prepared, { scenarioId, environmentId: batchEnv || null, testDataSetId: batchDataSet || null });
+    const data = await done;
+    return saveRun({ scenarioId, environmentId: batchEnv || null, testDataSetId: batchDataSet || null, data });
   };
 
   const startBatch = async () => {
     const ids = [...selected];
     setShowBatch(false);
     setBatch({ current: 0, total: ids.length, results: [] });
+    const project = await fetchActiveProject();
     for (let i = 0; i < ids.length; i++) {
       const name = scenarios.find((s) => s.id === ids[i])?.name ?? ids[i];
       setBatch((b) => ({ ...b, current: i + 1 }));
       let status;
       try {
-        status = await runOne(ids[i]);
+        status = await runOne(ids[i], project);
       } catch (e) {
         status = `atlandı (${e.message})`;
       }

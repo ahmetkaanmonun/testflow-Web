@@ -43,6 +43,23 @@ public class RunController {
         )).toList();
     }
 
+    /** Senaryodaki adımların son 30 gündeki element bulunma süreleri (bekleme ayarına rehber). */
+    @GetMapping("/step-stats")
+    public List<StepWaitStatDto> stepStats(@RequestParam String scenarioId, HttpServletRequest req) {
+        AuthenticatedUser user = CurrentUser.from(req);
+        Instant since = Instant.now().minus(java.time.Duration.ofDays(30));
+        java.util.Map<String, long[]> acc = new java.util.LinkedHashMap<>(); // stepId → [count, sum, max]
+        for (Object[] row : runs.findStepWaits(user.workspaceId(), scenarioId, since)) {
+            long wait = java.time.Duration.between((Instant) row[1], (Instant) row[2]).toMillis();
+            long[] a = acc.computeIfAbsent((String) row[0], k -> new long[3]);
+            a[0]++; a[1] += wait; a[2] = Math.max(a[2], wait);
+        }
+        return acc.entrySet().stream()
+                .map(e -> new StepWaitStatDto(e.getKey(), (int) e.getValue()[0],
+                        e.getValue()[1] / e.getValue()[0], e.getValue()[2]))
+                .toList();
+    }
+
     @GetMapping("/{id}")
     public RunDto get(@PathVariable String id, HttpServletRequest req) {
         AuthenticatedUser user = CurrentUser.from(req);

@@ -138,6 +138,7 @@ async function handle(msg, sender) {
       startUrl: msg.startUrl,
       steps: msg.steps,
       runContext: msg.runContext,
+      runConfig: msg.runConfig || {},
       index: 0,
       results: [],
       startedAt: new Date().toISOString(),
@@ -149,7 +150,7 @@ async function handle(msg, sender) {
   if (msg.type === 'GET_PLAY_STATE') {
     const s = await getSession();
     if (!s || s.mode !== 'play' || !sender.tab || sender.tab.id !== s.tabId) return { playing: false };
-    return { playing: true, steps: s.steps, index: s.index };
+    return { playing: true, steps: s.steps, index: s.index, runConfig: s.runConfig || {} };
   }
 
   // player.js: javascript: href'li linklerin kodunu sayfanın kendi

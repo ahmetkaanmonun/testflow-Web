@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api, getUser } from '../lib/api';
 import { describeStep, autoDescribe } from '../lib/describe';
+import { prepareRun, saveRun, postStartRun, resolveTimeout } from '../lib/run';
 
 const ACTIONS = ['goto', 'click', 'fill', 'select', 'upload', 'press', 'assert-text', 'assert-visible', 'wait'];
 
@@ -28,6 +29,8 @@ export default function ScenarioDetail() {
   const [progress, setProgress] = useState(null); // { current, total, results: [{setName, status}] }
   const runDoneResolver = useRef(null);
   const [editingDesc, setEditingDesc] = useState(null); // açıklaması düzenlenen adım index'i
+  const [timeoutSec, setTimeoutSec] = useState(''); // senaryo geneli bekleme (sn), boş = üst seviye
+  const [waitStats, setWaitStats] = useState({}); // stepId -> { avgWaitMs, maxWaitMs, samples }
 
   useEffect(() => {
     Promise.all([api(`/scenarios/${id}`), api('/test-data-sets'), api('/environments'), api('/folders')])
@@ -36,6 +39,7 @@ export default function ScenarioDetail() {
         setName(s.name);
         setStartUrl(s.startUrl);
         setFolderId(s.folderId || '');
+        setTimeoutSec(s.timeoutMs ? String(s.timeoutMs / 1000) : '');
         setSteps(s.steps || []);
         setDataSets(ds);
         setEnvironments(envs);
@@ -43,6 +47,9 @@ export default function ScenarioDetail() {
       })
       .catch((e) => setError(e.message));
     api('/projects').then(setProjects).catch(() => {});
+    api(`/runs/step-stats?scenarioId=${id}`)
+      .then((list) => setWaitStats(Object.fromEntries(list.map((x) => [x.stepId, x]))))
+      .catch(() => {});
   }, [id]);
 
   // Koşum sonucu dinleyicisi: bekleyen promise'i çözer (sıralı koşum döngüsü bekliyor)
@@ -93,6 +100,12 @@ export default function ScenarioDetail() {
     .filter((e) => (action === 'upload' ? e.type === 'file' : e.type !== 'file'))
     .map((e) => e.key))];
 
+  // Senaryo geneli süre (ms) — boş/geçersizse null (ortam/proje varsayılanına düşülür)
+  const scenarioTimeoutMs = () => {
+    const v = parseFloat(String(timeoutSec).replace(',', '.'));
+    return v > 0 ? Math.round(Math.min(Math.max(v, 0.5), 60) * 1000) : null;
+  };
+
   const updateStep = (i, patch) =>
     setSteps((prev) => prev.map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
 
@@ -136,12 +149,14 @@ export default function ScenarioDetail() {
           startUrl: startUrl || scenario.startUrl,
           folderId: folderId || null,
           steps: normalized,
+          timeoutMs: scenarioTimeoutMs() ?? 0, // 0 → temizle
         }),
       });
       setScenario(updated);
       setName(updated.name);
       setStartUrl(updated.startUrl);
       setSteps(updated.steps || []);
+      setTimeoutSec(updated.timeoutMs ? String(updated.timeoutMs / 1000) : '');
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     } catch (e) { setError(e.message); }
@@ -157,30 +172,6 @@ export default function ScenarioDetail() {
   };
 
   // ---------- Koşum (data-driven: seçilen her veri setiyle sırayla) ----------
-  const resolveSteps = (currentSteps, dataSetId) => {
-    const set = dataSetId ? dataSets.find((d) => d.id === dataSetId) : null;
-    const entries = set ? JSON.parse(set.entries) : [];
-    const byKey = Object.fromEntries(entries.map((e) => [e.key, e]));
-    return currentSteps.map((s) => {
-      if (!s.dataBinding) return s;
-      const binding = JSON.parse(s.dataBinding);
-      const entry = byKey[binding.dataSetKey];
-      if (entry === undefined) {
-        throw new Error(`"${binding.dataSetKey}" anahtarı ${set ? `"${set.name}" setinde` : 'seçili sette'} yok.`);
-      }
-      return { ...s, value: entry.value, ...(entry.type === 'file' ? { fileName: entry.fileName } : {}) };
-    });
-  };
-
-  const resolveStartUrl = () => {
-    if (!runEnv) return startUrl || scenario.startUrl;
-    const env = environments.find((en) => en.id === runEnv);
-    try {
-      const u = new URL(startUrl || scenario.startUrl);
-      return new URL(env.baseUrl).origin + u.pathname + u.search + u.hash;
-    } catch { return env.baseUrl; }
-  };
-
   const startRun = async () => {
     setError('');
     const hasBindingNow = steps.some((s) => s.dataBinding);
@@ -195,7 +186,8 @@ export default function ScenarioDetail() {
     setProgress({ current: 0, total: setList.length, results: [] });
 
     let currentSteps = steps;
-    const url = resolveStartUrl();
+    const environment = environments.find((en) => en.id === runEnv) || null;
+    const project = projects.find((p) => p.active) || null;
 
     for (let i = 0; i < setList.length; i++) {
       const dataSetId = setList[i];
@@ -206,30 +198,17 @@ export default function ScenarioDetail() {
 
       let status;
       try {
-        const resolved = resolveSteps(currentSteps, dataSetId);
+        const dataSet = dataSetId ? dataSets.find((d) => d.id === dataSetId) : null;
+        const prepared = await prepareRun({
+          scenario: { ...scenario, startUrl: startUrl || scenario.startUrl, steps: currentSteps, timeoutMs: scenarioTimeoutMs() },
+          environment, dataSet, project,
+        });
         const done = new Promise((resolve) => { runDoneResolver.current = resolve; });
-        window.postMessage({
-          type: 'TESTFLOW_START_RUN',
-          startUrl: url,
-          steps: resolved,
-          runContext: { scenarioId: id, environmentId: runEnv || null, testDataSetId: dataSetId },
-        }, '*');
+        postStartRun(prepared, { scenarioId: id, environmentId: runEnv || null, testDataSetId: dataSetId });
 
         const data = await done;
         const results = data.results || [];
-        status = data.aborted || results.some((r) => r.status === 'failed') ? 'failed' : 'passed';
-        await api('/runs', {
-          method: 'POST',
-          body: JSON.stringify({
-            scenarioId: id,
-            environmentId: runEnv || null,
-            testDataSetId: dataSetId,
-            status,
-            startedAt: data.startedAt,
-            finishedAt: data.finishedAt,
-            stepResults: results,
-          }),
-        });
+        status = await saveRun({ scenarioId: id, environmentId: runEnv || null, testDataSetId: dataSetId, data });
         // Healing kalıcılaştır — sonraki set güncel locator'larla koşsun
         currentSteps = await persistHealing(currentSteps, results);
       } catch (e) {
@@ -325,6 +304,14 @@ export default function ScenarioDetail() {
           <option value="">Klasörsüz</option>
           {folders.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
         </select>
+        <label className="row muted" style={{ fontSize: 13, gap: 6 }}
+               title="Bu senaryodaki adımların elementi bekleme süresi. Boş bırakılırsa ortam, o da yoksa proje ayarı kullanılır. Adım bazında ayrıca değiştirilebilir.">
+          Bekleme
+          <input value={timeoutSec} onChange={(e) => setTimeoutSec(e.target.value)}
+                 placeholder={`${resolveTimeout({ project: projects.find((p) => p.active) }).ms / 1000}`}
+                 inputMode="decimal" style={{ width: 60 }} />
+          sn
+        </label>
       </div>
 
       {showRun && (
@@ -339,6 +326,19 @@ export default function ScenarioDetail() {
             </button>
           </div>
 
+          {(() => {
+            const t = resolveTimeout({
+              scenario: { timeoutMs: scenarioTimeoutMs() },
+              environment: environments.find((en) => en.id === runEnv),
+              project: projects.find((p) => p.active),
+            });
+            return (
+              <div className="muted" style={{ fontSize: 12, marginBottom: 10 }}>
+                ⏱ Element bekleme süresi: <b>{t.ms / 1000} sn</b> ({t.source}); doğrulama adımlarında 2,4 katı.
+                Adımda ayrıca süre verildiyse o geçerlidir.
+              </div>
+            );
+          })()}
           <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
             Test verisi — birden fazla seçerseniz senaryo her setle ayrı ayrı koşar (data-driven):
           </div>
@@ -484,11 +484,50 @@ export default function ScenarioDetail() {
               <button className="ghost" onClick={() => moveStep(i, 1)}>↓</button>
               <button className="danger" onClick={() => removeStep(i)}>✕</button>
             </div>
-            {firstCandidate && (
-              <div className="muted" style={{ fontSize: 11, marginTop: 6, marginLeft: 34 }}>
-                locator: {firstCandidate}
-              </div>
-            )}
+            {(() => {
+              let meta = {};
+              try { meta = JSON.parse(step.meta || '{}'); } catch {}
+              const needsElement = !['wait', 'goto'].includes(step.action);
+              const stat = step.id ? waitStats[step.id] : null;
+              const effectiveMs = meta.timeoutMs || (resolveTimeout({
+                scenario: { timeoutMs: scenarioTimeoutMs() }, project: projects.find((p) => p.active),
+              }).ms * (step.action.startsWith('assert') ? 2.4 : 1));
+              const risky = stat && stat.maxWaitMs > effectiveMs * 0.8;
+              return (
+                <div className="row muted" style={{ fontSize: 12, marginTop: 8, marginLeft: 34, gap: 10, flexWrap: 'wrap' }}>
+                  {needsElement && (
+                    <>
+                      <label className="row" style={{ gap: 4 }}
+                             title="Bu adım için elementi bekleme süresi. Boşsa senaryo/ortam/proje ayarı kullanılır.">
+                        ⏱
+                        <input value={meta.timeoutMs ? String(meta.timeoutMs / 1000) : ''}
+                               onChange={(e) => {
+                                 const v = parseFloat(e.target.value.replace(',', '.'));
+                                 updateMeta(i, 'timeoutMs', v > 0 ? Math.round(Math.min(Math.max(v, 0.5), 60) * 1000) : null);
+                               }}
+                               placeholder="vars." inputMode="decimal" style={{ width: 52, fontSize: 12, padding: '2px 6px' }} />
+                        sn
+                      </label>
+                      <select value={meta.waitFor || ''} onChange={(e) => updateMeta(i, 'waitFor', e.target.value)}
+                              title="Element hangi durumda hazır sayılsın?"
+                              style={{ width: 'auto', fontSize: 12, padding: '2px 6px' }}>
+                        <option value="">görünür olsun (vars.)</option>
+                        <option value="enabled">tıklanabilir olsun</option>
+                        <option value="exists">sayfada olsun (gizli olabilir)</option>
+                      </select>
+                    </>
+                  )}
+                  {stat && (
+                    <span style={{ color: risky ? 'var(--yellow)' : undefined }}
+                          title={`Son 30 günde ${stat.samples} koşum`}>
+                      {risky ? '⚠ ' : ''}son koşumlarda bulunma: ort. {(stat.avgWaitMs / 1000).toFixed(1).replace('.', ',')} sn,
+                      en çok {(stat.maxWaitMs / 1000).toFixed(1).replace('.', ',')} sn
+                    </span>
+                  )}
+                  {firstCandidate && <span style={{ fontSize: 11 }}>locator: {firstCandidate}</span>}
+                </div>
+              );
+            })()}
           </div>
         );
       })}

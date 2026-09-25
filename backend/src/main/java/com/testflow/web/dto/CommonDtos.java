@@ -12,8 +12,10 @@ public class CommonDtos {
     public record CreateFolderRequest(@NotBlank String name) {}
 
     // Environment
-    public record EnvironmentDto(String id, String name, String baseUrl, Instant createdAt) {}
-    public record CreateEnvironmentRequest(@NotBlank String name, @NotBlank String baseUrl) {}
+    public record EnvironmentDto(String id, String name, String baseUrl, Instant createdAt, Integer defaultTimeoutMs) {}
+    public record CreateEnvironmentRequest(@NotBlank String name, @NotBlank String baseUrl, Integer defaultTimeoutMs) {}
+    /** Alan null → değişmez; defaultTimeoutMs 0 → temizlenir. */
+    public record UpdateEnvironmentRequest(String name, String baseUrl, Integer defaultTimeoutMs) {}
 
     // TestDataSet
     public record TestDataSetDto(String id, String name, String entries, Instant createdAt, Instant updatedAt) {}
@@ -35,6 +37,9 @@ public class CommonDtos {
             String id, String scenarioId, String environmentId, String testDataSetId,
             String status, String triggeredBy, Instant startedAt, Instant finishedAt,
             Instant createdAt, List<RunStepResultDto> stepResults) {}
+
+    /** Bir adımın son koşumlardaki element bulunma süresi istatistiği. */
+    public record StepWaitStatDto(String stepId, int samples, long avgWaitMs, long maxWaitMs) {}
 
     public record IngestRunRequest(
             @NotBlank String scenarioId,

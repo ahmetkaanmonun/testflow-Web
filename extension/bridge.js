@@ -23,6 +23,7 @@ window.addEventListener('message', (event) => {
       startUrl: event.data.startUrl,
       steps: event.data.steps,          // binding'leri çözülmüş adımlar
       runContext: event.data.runContext, // scenarioId, environmentId, testDataSetId
+      runConfig: event.data.runConfig,   // { defaultTimeoutMs }
     });
   }
 });
@@ -37,12 +38,9 @@ chrome.runtime.onMessage.addListener((msg) => {
     }, '*');
   }
   if (msg.type === 'RUN_DONE') {
-    window.postMessage({
-      type: 'TESTFLOW_RUN_DONE',
-      runContext: msg.runContext,
-      startedAt: msg.startedAt,
-      finishedAt: msg.finishedAt,
-      results: msg.results,
-    }, '*');
+    // Tüm alanlar iletilir (aborted dahil — önceden düşüyordu, elle kapatılan
+    // koşum arayüzde "passed" görünebiliyordu)
+    const { type: _t, ...rest } = msg;
+    window.postMessage({ ...rest, type: 'TESTFLOW_RUN_DONE' }, '*');
   }
 });

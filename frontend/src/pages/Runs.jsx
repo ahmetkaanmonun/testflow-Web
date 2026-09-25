@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { api } from '../lib/api';
+import { prepareRun, saveRun, postStartRun, fetchActiveProject } from '../lib/run';
 import { describeStep, technicalDetail } from '../lib/describe';
 import { formatDateTime, formatTimeMs, formatOffset, formatDuration, diffMs } from '../lib/format';
 
@@ -59,20 +60,12 @@ export default function Runs() {
       rerunCtx.current = null;
       setRerunning(null);
 
-      const results = event.data.results || [];
-      const anyFailed = results.some((r) => r.status === 'failed');
       try {
-        await api('/runs', {
-          method: 'POST',
-          body: JSON.stringify({
-            scenarioId: ctx.scenarioId,
-            environmentId: ctx.environmentId,
-            testDataSetId: ctx.testDataSetId,
-            status: event.data.aborted ? 'failed' : (anyFailed ? 'failed' : 'passed'),
-            startedAt: event.data.startedAt,
-            finishedAt: event.data.finishedAt,
-            stepResults: results,
-          }),
+        await saveRun({
+          scenarioId: ctx.scenarioId,
+          environmentId: ctx.environmentId,
+          testDataSetId: ctx.testDataSetId,
+          data: event.data,
         });
         await load();
       } catch (err) { setError(err.message); }
@@ -89,33 +82,16 @@ export default function Runs() {
       const scenario = await api(`/scenarios/${run.scenarioId}`);
       if (!scenario.steps?.length) throw new Error('Senaryoda adım yok.');
 
-      // Test verisi çözümü
-      let byKey = {};
-      if (run.testDataSetId) {
-        const set = await api(`/test-data-sets/${run.testDataSetId}`);
-        byKey = Object.fromEntries(JSON.parse(set.entries).map((en) => [en.key, en]));
-      }
-      const steps = scenario.steps.map((s) => {
-        if (!s.dataBinding) return s;
-        const key = JSON.parse(s.dataBinding).dataSetKey;
-        const entry = byKey[key];
-        if (entry === undefined) {
-          throw new Error(`"${key}" anahtarı koşumun test veri setinde yok — set silinmiş/değişmiş olabilir. Senaryo sayfasından koşun.`);
-        }
-        return { ...s, value: entry.value, ...(entry.type === 'file' ? { fileName: entry.fileName } : {}) };
-      });
-
-      // Ortam çözümü
-      let startUrl = scenario.startUrl;
-      if (run.environmentId) {
-        const envs = await api('/environments');
-        const env = envs.find((en) => en.id === run.environmentId);
-        if (env) {
-          try {
-            const u = new URL(scenario.startUrl);
-            startUrl = new URL(env.baseUrl).origin + u.pathname + u.search + u.hash;
-          } catch { startUrl = env.baseUrl; }
-        }
+      const dataSet = run.testDataSetId ? await api(`/test-data-sets/${run.testDataSetId}`) : null;
+      const environment = run.environmentId
+        ? (await api('/environments')).find((en) => en.id === run.environmentId) || null
+        : null;
+      const project = await fetchActiveProject();
+      let prepared;
+      try {
+        prepared = await prepareRun({ scenario, environment, dataSet, project });
+      } catch (err) {
+        throw new Error(`${err.message} Veri seti silinmiş/değişmiş olabilir — senaryo sayfasından koşun.`);
       }
 
       rerunCtx.current = {
@@ -124,12 +100,7 @@ export default function Runs() {
         testDataSetId: run.testDataSetId || null,
       };
       setRerunning(run.id);
-      window.postMessage({
-        type: 'TESTFLOW_START_RUN',
-        startUrl,
-        steps,
-        runContext: rerunCtx.current,
-      }, '*');
+      postStartRun(prepared, rerunCtx.current);
     } catch (err) { setError(err.message); }
   };
 

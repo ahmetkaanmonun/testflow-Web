@@ -23,7 +23,8 @@ public class ScenarioDtos {
 
     public record ScenarioDetail(
             String id, String name, String startUrl, String folderId,
-            String tags, List<StepDto> steps, Instant createdAt, Instant updatedAt) {}
+            String tags, List<StepDto> steps, Instant createdAt, Instant updatedAt,
+            Integer timeoutMs) {}
 
     public record CreateScenarioRequest(
             @NotBlank String name,
@@ -32,6 +33,8 @@ public class ScenarioDtos {
             String tags,
             List<StepDto> steps) {}
 
+    /** timeoutMs: null → değişmez, 0 → temizlenir. */
     public record UpdateScenarioRequest(
-            String name, String startUrl, String folderId, String tags, List<StepDto> steps) {}
+            String name, String startUrl, String folderId, String tags, List<StepDto> steps,
+            Integer timeoutMs) {}
 }

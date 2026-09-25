@@ -30,6 +30,9 @@ public class Workspace {
     @Column(nullable = false)
     private boolean personal = false;
 
+    /** Proje geneli locator bekleme süresi (ms); boşsa sistem varsayılanı. */
+    private Integer defaultTimeoutMs;
+
     @Column(updatable = false, nullable = false)
     private Instant createdAt = Instant.now();
 

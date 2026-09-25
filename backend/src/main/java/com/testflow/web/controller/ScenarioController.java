@@ -45,6 +45,7 @@ public class ScenarioController {
         boolean sameProject = body.targetProjectId().equals(src.getWorkspaceId());
         dst.setName(sameProject ? src.getName() + " (kopya)" : src.getName());
         dst.setStartUrl(src.getStartUrl());
+        dst.setTimeoutMs(src.getTimeoutMs());
         dst.setTags(src.getTags());
         dst.setWorkspaceId(body.targetProjectId());
         dst.setFolderId(sameProject ? src.getFolderId() : null); // klasörler projeye özgüdür
@@ -107,6 +108,7 @@ public class ScenarioController {
         if (body.folderId() != null) s.setFolderId(body.folderId());
         if (body.tags() != null) s.setTags(body.tags());
         if (body.steps() != null) applySteps(s, body.steps());
+        if (body.timeoutMs() != null) s.setTimeoutMs(Timeouts.normalize(body.timeoutMs()));
         return toDetail(scenarios.save(s));
     }
 
@@ -162,6 +164,6 @@ public class ScenarioController {
                 s.getSteps().stream().map(st -> new StepDto(
                         st.getId(), st.getOrderIndex(), st.getAction(), st.getCandidates(),
                         st.getValue(), st.getDataBinding(), st.isSensitive(), st.getMeta())).toList(),
-                s.getCreatedAt(), s.getUpdatedAt());
+                s.getCreatedAt(), s.getUpdatedAt(), s.getTimeoutMs());
     }
 }
