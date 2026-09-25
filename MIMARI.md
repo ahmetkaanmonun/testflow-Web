@@ -194,9 +194,18 @@ kaybolur, aynı adım yeni sayfada tekrar aranır ve sahte "element bulunamadı"
    `mode:'play'` oturumu kurar.
 3. player.js her adımda:
    - **Element arama:** adaylar skor sırasıyla, 250ms aralıklarla, süre
-     dolana dek denenir. Süreler: normal **5sn**, assert **12sn**
-     (sayfa geçişi/yavaş yükleme), opsiyonel **3sn** (bazen gelen modallar
-     koşumu bekletmesin).
+     dolana dek denenir. Süre önceliği: `Step.meta.timeoutMs` → koşum
+     varsayılanı (`runConfig.defaultTimeoutMs`; arayüzde senaryo → ortam →
+     proje sırasıyla çözülür) → 5sn. Adımda süre yoksa oranlar: assert
+     **2,4×** (sayfa geçişi/yavaş yükleme), opsiyonel **0,6×** (bazen gelen
+     modallar koşumu bekletmesin). `meta.waitFor`: `visible` (vars.),
+     `enabled` (aktif + `elementFromPoint` ile üstü kapalı değil), `exists`.
+     Click adımları disabled elementin aktifleşmesini her koşulda bekler.
+   - **Zaman damgaları:** her sonuçta `startedAt` / `locatedAt` (element
+     bulundu) / `finishedAt` (epoch ms) → `RunStepResult`'ta Instant.
+     `GET /api/runs/step-stats` son 30 günün bekleme istatistiğini döner.
+   - **Snapshot:** her sonuçta `stepSnapshot` (adımın o anki tanımı; hassas
+     ve bağlı değerler yazılmaz) — senaryo değişse de geçmiş okunur.
    - **Tür doğrulaması:** fill yalnızca INPUT/TEXTAREA ve kayıttaki
      `inputType` ile eşleşen elemana; select yalnızca SELECT'e; upload
      yalnızca `input[type=file]`'a uygulanır. Bu, self-healing'in yanlış
@@ -222,6 +231,28 @@ kaybolur, aynı adım yeni sayfada tekrar aranır ve sahte "element bulunamadı"
 sırayla `runOne` çağrılır; her koşumun RUN_DONE'u bir Promise resolver ile
 beklenir. Eklenti tek oturum yönettiği için koşumlar paraleldir değil,
 sıralıdır.
+
+**Adım kimliği:** `PATCH /scenarios/{id}` adımları id'ye göre upsert eder
+(UUID korunur). `RunStepResult.stepId` bu sayede kalıcı olarak doğru adımı
+gösterir.
+
+**Önkoşullar:** `Scenario.preconditionIds` (sıralı, virgüllü) +
+`preconditionText`. `PreconditionService` döngü/derinlik (≤3) doğrular;
+`GET /scenarios/precondition-chain?ids=` zinciri koşum sırasıyla (DFS,
+tekilleştirilmiş) döner. `lib/run.js#prepareRun` adımları birleştirir:
+önkoşul adımları (`meta.precondition` işaretli) → sentetik `goto` →
+senaryo adımları. Başarısız önkoşul adımı koşumu `blocked` yapar.
+
+**Araya kayıt:** `START_RECORD_FROM` → önce `mode:'play', thenRecord`
+ile ön adımlar oynatılır; `PLAY_DONE`'da hepsi geçtiyse oturum aynı sekmede
+`mode:'record'`'a döner ve recorder `scripting.executeScript` ile yeniden
+enjekte edilir (sayfa yüklenirken çalışan kopya "kayıt yok" deyip çıkmıştı;
+`window.__tfRecorderActive` çift dinleyiciyi engeller). `RECORDING_DONE`
+`insertContext` taşır; senaryo detayı adımları ekleme noktasına yerleştirir.
+
+**Doğal dil:** recorder kayıtta `meta.label` + `meta.elementKind` yakalar;
+`lib/describe.js` cümle üretir (Türkçe ekler etikete değil öğe türüne
+bağlı). `meta.description` kullanıcı açıklamasıdır.
 
 ## 7. Self-Healing ve Kalıcılaştırma
 
@@ -256,7 +287,8 @@ sıralıdır.
 | H2 in-memory: restart'ta veri gider | Pilot için bilinçli tercih; kalıcılık için `jdbc:h2:file` veya PostgreSQL/MSSQL (yalnızca config + driver). Görüntüler o aşamada diske taşınmalı (DB'de yol tutulur) |
 | Zamanlanmış/headless koşum yok | Eklenti mimarisinin doğal sınırı. Plan: player mantığının Spring + Playwright worker'a taşınması (adım/locator modeli buna hazır) → CI/CD ve zamanlama bunun üzerine gelir |
 | iframe içi kayıt/koşum | Recorder frame bilgisi toplayabilir ama player kullanmıyor; ihtiyaç geldiğinde eklenecek |
-| Aksiyon seti | hover, sürükle-bırak, klavye tuşları, yeni sekme takibi, `wait` player'da henüz yok |
+| Aksiyon seti | hover, sürükle-bırak, yeni sekme takibi henüz yok (`wait`, `goto`, `press` var) |
+| Önkoşul adımlarında healing | Önkoşul adımları iyileşirse kalıcılaştırma yalnız ana senaryoya uygulanır; önkoşul senaryosu kendi koşumunda kalıcılaşır |
 | Ekran görüntüsü kotası | `captureVisibleTab` ~2/sn ile sınırlı; çok hızlı adımlarda tek tük kare boş kalabilir (koşumu etkilemez) |
 | Dosya girdisi ≤3MB | H2 in-memory + storage.session sınırları; kalıcı depoya geçişte artırılabilir |
 | Senaryo sürüm geçmişi yok | Talebe göre eklenecek |
