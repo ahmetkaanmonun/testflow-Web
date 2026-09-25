@@ -33,6 +33,8 @@ export default function Dashboard() {
   const week = runs.filter((r) => now - new Date(r.createdAt).getTime() < 7 * 24 * 3600 * 1000);
   const passed = week.filter((r) => r.status === 'passed').length;
   const failed = week.filter((r) => r.status === 'failed').length;
+  // blocked: önkoşul sağlanamadı, senaryonun kendisi test edilemedi — başarı oranına katılmaz
+  const blocked = week.filter((r) => r.status === 'blocked').length;
   const passRate = passed + failed > 0 ? Math.round((passed / (passed + failed)) * 100) : null;
   const healedTotal = week.reduce((sum, r) => sum + (r.healedSteps || 0), 0);
 
@@ -59,6 +61,7 @@ export default function Dashboard() {
         <StatCard label="Başarı Oranı" value={passRate != null ? `%${passRate}` : '—'}
                   tone={passRate == null ? null : passRate >= 80 ? 'green' : passRate >= 50 ? 'yellow' : 'red'} />
         <StatCard label="İyileşen Adım" value={healedTotal} tone={healedTotal > 0 ? 'yellow' : null} />
+        {blocked > 0 && <StatCard label="Önkoşulu Sağlanamayan" value={blocked} tone="yellow" />}
         <StatCard label="Toplam Senaryo" value={scenarios.length} />
       </div>
 

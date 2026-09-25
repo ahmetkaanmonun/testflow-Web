@@ -19,12 +19,13 @@ public class ScenarioDtos {
 
     public record ScenarioSummary(
             String id, String name, String startUrl, String folderId,
-            String tags, int stepCount, Instant createdAt, Instant updatedAt) {}
+            String tags, int stepCount, Instant createdAt, Instant updatedAt,
+            List<String> preconditionIds) {}
 
     public record ScenarioDetail(
             String id, String name, String startUrl, String folderId,
             String tags, List<StepDto> steps, Instant createdAt, Instant updatedAt,
-            Integer timeoutMs) {}
+            Integer timeoutMs, String preconditionText, List<String> preconditionIds) {}
 
     public record CreateScenarioRequest(
             @NotBlank String name,
@@ -33,8 +34,11 @@ public class ScenarioDtos {
             String tags,
             List<StepDto> steps) {}
 
-    /** timeoutMs: null → değişmez, 0 → temizlenir. */
+    /**
+     * null alanlar değişmez. timeoutMs 0 → temizlenir; preconditionIds boş liste → temizlenir;
+     * preconditionText "" → temizlenir.
+     */
     public record UpdateScenarioRequest(
             String name, String startUrl, String folderId, String tags, List<StepDto> steps,
-            Integer timeoutMs) {}
+            Integer timeoutMs, String preconditionText, List<String> preconditionIds) {}
 }

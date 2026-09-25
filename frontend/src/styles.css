@@ -123,6 +123,7 @@ a:hover { text-decoration: underline; }
 .badge.failed { background: var(--red-soft); color: var(--red); }
 .badge.queued, .badge.running { background: var(--yellow-soft); color: var(--yellow); }
 .badge.skipped { background: var(--surface2); color: var(--muted); }
+.badge.blocked { background: var(--yellow-soft); color: var(--yellow); border: 1px dashed var(--yellow); }
 
 .card {
   background: var(--surface);

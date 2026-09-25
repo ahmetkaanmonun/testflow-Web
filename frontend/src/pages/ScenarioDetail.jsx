@@ -1,8 +1,8 @@
 import { useEffect, useState, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { api, getUser } from '../lib/api';
 import { describeStep, autoDescribe } from '../lib/describe';
-import { prepareRun, saveRun, postStartRun, postStartRecordFrom, resolveTimeout } from '../lib/run';
+import { prepareRun, saveRun, postStartRun, postStartRecordFrom, resolveTimeout, isPreconditionResult } from '../lib/run';
 
 const ACTIONS = ['goto', 'click', 'fill', 'select', 'upload', 'press', 'assert-text', 'assert-visible', 'wait'];
 
@@ -38,6 +38,11 @@ export default function ScenarioDetail() {
   const [recDataSet, setRecDataSet] = useState('');
   const [insertState, setInsertState] = useState(null); // { kind: 'recording'|'error'|'added', ... }
   const insertBatch = useRef(0);
+  // Önkoşullar
+  const [preIds, setPreIds] = useState([]);
+  const [preText, setPreText] = useState('');
+  const [preOpen, setPreOpen] = useState(false);
+  const [allScenarios, setAllScenarios] = useState([]);
 
   useEffect(() => {
     Promise.all([api(`/scenarios/${id}`), api('/test-data-sets'), api('/environments'), api('/folders')])
@@ -47,6 +52,9 @@ export default function ScenarioDetail() {
         setStartUrl(s.startUrl);
         setFolderId(s.folderId || '');
         setTimeoutSec(s.timeoutMs ? String(s.timeoutMs / 1000) : '');
+        setPreIds(s.preconditionIds || []);
+        setPreText(s.preconditionText || '');
+        setPreOpen(!!((s.preconditionIds || []).length || s.preconditionText));
         setSteps(s.steps || []);
         setDataSets(ds);
         setEnvironments(envs);
@@ -54,6 +62,7 @@ export default function ScenarioDetail() {
       })
       .catch((e) => setError(e.message));
     api('/projects').then(setProjects).catch(() => {});
+    api('/scenarios').then(setAllScenarios).catch(() => {});
     api(`/runs/step-stats?scenarioId=${id}`)
       .then((list) => setWaitStats(Object.fromEntries(list.map((x) => [x.stepId, x]))))
       .catch(() => {});
@@ -86,7 +95,10 @@ export default function ScenarioDetail() {
         if (failed) {
           let snap = null;
           try { snap = JSON.parse(failed.stepSnapshot); } catch {}
-          what = `${failed.orderIndex + 1}. adım geçmedi${snap ? ` (${describeStep(snap)})` : ''}: ${failed.errorMessage || ''}`;
+          const pre = snap?.meta?.precondition;
+          what = pre
+            ? `Önkoşul "${pre.scenarioName}" geçmedi${snap ? ` (${describeStep(snap)})` : ''}: ${failed.errorMessage || ''}`
+            : `${failed.orderIndex + 1}. adım geçmedi${snap ? ` (${describeStep(snap)})` : ''}: ${failed.errorMessage || ''}`;
         }
         setInsertState({ kind: 'error', message: `Ekleme noktasına ulaşılamadı, kayda geçilmedi. ${what}` });
         return;
@@ -169,12 +181,13 @@ export default function ScenarioDetail() {
     const dataSet = recDataSet ? dataSets.find((d) => d.id === recDataSet) : null;
     try {
       const prepared = await prepareRun({
-        scenario: { ...scenario, startUrl: startUrl || scenario.startUrl, steps: prefix, timeoutMs: scenarioTimeoutMs() },
+        scenario: { ...scenario, startUrl: startUrl || scenario.startUrl, steps: prefix,
+                    timeoutMs: scenarioTimeoutMs(), preconditionIds: preIds },
         environment, dataSet, project: projects.find((p) => p.active) || null,
       });
       setRecordPanel(null);
       setInsertMenu(null);
-      setInsertState({ kind: 'recording', afterIndex, prefixCount: prefix.length });
+      setInsertState({ kind: 'recording', afterIndex, prefixCount: prepared.steps.length });
       postStartRecordFrom(prepared, { scenarioId: id, afterIndex });
     } catch (e) { setError(e.message); }
   };
@@ -223,6 +236,8 @@ export default function ScenarioDetail() {
           folderId: folderId || null,
           steps: normalized,
           timeoutMs: scenarioTimeoutMs() ?? 0, // 0 → temizle
+          preconditionText: preText,
+          preconditionIds: preIds,
         }),
       });
       setScenario(updated);
@@ -231,6 +246,8 @@ export default function ScenarioDetail() {
       setSteps(updated.steps || []);
       setTimeoutSec(updated.timeoutMs ? String(updated.timeoutMs / 1000) : '');
       if (insertState?.kind === 'added') setInsertState(null);
+      setPreIds(updated.preconditionIds || []);
+      setPreText(updated.preconditionText || '');
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     } catch (e) { setError(e.message); }
@@ -274,7 +291,8 @@ export default function ScenarioDetail() {
       try {
         const dataSet = dataSetId ? dataSets.find((d) => d.id === dataSetId) : null;
         const prepared = await prepareRun({
-          scenario: { ...scenario, startUrl: startUrl || scenario.startUrl, steps: currentSteps, timeoutMs: scenarioTimeoutMs() },
+          scenario: { ...scenario, startUrl: startUrl || scenario.startUrl, steps: currentSteps,
+                      timeoutMs: scenarioTimeoutMs(), preconditionIds: preIds },
           environment, dataSet, project,
         });
         const done = new Promise((resolve) => { runDoneResolver.current = resolve; });
@@ -454,6 +472,75 @@ export default function ScenarioDetail() {
         </label>
       </div>
 
+      {(() => {
+        const byId = Object.fromEntries(allScenarios.map((x) => [x.id, x]));
+        const usedBy = allScenarios.filter((x) => (x.preconditionIds || []).includes(id));
+        // Doğrudan döngü oluşturacaklar ve kendisi seçenek dışı (derin döngüyü backend reddeder)
+        const options = allScenarios.filter((x) =>
+          x.id !== id && !preIds.includes(x.id) && !(x.preconditionIds || []).includes(id));
+        const movePre = (k, dir) => setPreIds((prev) => {
+          const next = [...prev]; const j = k + dir;
+          if (j < 0 || j >= next.length) return prev;
+          [next[k], next[j]] = [next[j], next[k]];
+          return next;
+        });
+        if (!preOpen) {
+          return (
+            <div className="row muted" style={{ marginBottom: 16, fontSize: 13, gap: 10 }}>
+              <button className="ghost" onClick={() => setPreOpen(true)}>＋ Önkoşul ekle</button>
+              {usedBy.length > 0 && <span>Bu senaryo {usedBy.length} senaryoda önkoşul olarak kullanılıyor.</span>}
+            </div>
+          );
+        }
+        return (
+          <div className="card" style={{ marginBottom: 16 }}>
+            <div className="row" style={{ justifyContent: 'space-between', marginBottom: 10 }}>
+              <strong>Önkoşullar</strong>
+              {preIds.length === 0 && !preText && (
+                <button className="ghost" onClick={() => setPreOpen(false)}>Kapat</button>
+              )}
+            </div>
+            <textarea value={preText} onChange={(e) => setPreText(e.target.value)} rows={2}
+                      placeholder="Açıklayıcı önkoşul (örn. kullanıcının onay yetkisi olmalı, sepette ürün bulunmalı). Bilgi amaçlıdır, koşulmaz."
+                      style={{ width: '100%', resize: 'vertical', marginBottom: 12 }} />
+            <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
+              Önce koşulacak senaryolar — aynı pencerede, sırayla. Biri başarısız olursa bu senaryo
+              koşulmaz ve sonuç <span className="badge blocked">blocked</span> olur.
+            </div>
+            {preIds.map((pid, k) => (
+              <div key={pid} className="row" style={{ gap: 8, marginBottom: 6 }}>
+                <span className="muted" style={{ width: 20 }}>{k + 1}.</span>
+                {byId[pid]
+                  ? <Link to={`/scenarios/${pid}`} style={{ flex: 1 }}>{byId[pid].name}</Link>
+                  : <span className="muted" style={{ flex: 1 }}>(bulunamadı)</span>}
+                {byId[pid]?.preconditionIds?.length > 0 && (
+                  <span className="muted" style={{ fontSize: 12 }}>+{byId[pid].preconditionIds.length} önkoşulu var</span>
+                )}
+                <button className="ghost" onClick={() => movePre(k, -1)}>↑</button>
+                <button className="ghost" onClick={() => movePre(k, 1)}>↓</button>
+                <button className="danger" onClick={() => setPreIds((prev) => prev.filter((x) => x !== pid))}>✕</button>
+              </div>
+            ))}
+            <select value="" onChange={(e) => e.target.value && setPreIds((prev) => [...prev, e.target.value])}
+                    style={{ maxWidth: 360, marginTop: 4 }}>
+              <option value="">＋ Önkoşul senaryosu seç…</option>
+              {options.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+            </select>
+            {usedBy.length > 0 && (
+              <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>
+                Bu senaryoyu önkoşul olarak kullananlar:{' '}
+                {usedBy.map((x, k) => (
+                  <span key={x.id}>{k > 0 && ', '}<Link to={`/scenarios/${x.id}`}>{x.name}</Link></span>
+                ))}
+              </div>
+            )}
+            <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+              Değişiklikler <b>Kaydet</b> ile kalıcı olur.
+            </div>
+          </div>
+        );
+      })()}
+
       {showRun && (
         <div className="card" style={{ marginBottom: 16 }}>
           <div className="row" style={{ marginBottom: 12 }}>
@@ -539,7 +626,7 @@ export default function ScenarioDetail() {
           </div>
           {progress.results.map((r, i) => (
             <div key={i} className="row" style={{ fontSize: 13, marginBottom: 4 }}>
-              <span className={`badge ${r.status === 'passed' ? 'passed' : 'failed'}`}>{r.status}</span>
+              <span className={`badge ${['passed', 'blocked'].includes(r.status) ? r.status : 'failed'}`}>{r.status}</span>
               <span>{r.setName}</span>
             </div>
           ))}

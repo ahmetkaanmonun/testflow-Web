@@ -36,7 +36,9 @@ export default function Runs() {
     }
     if (!src && result.stepId) src = detailSteps[result.stepId] || null;
     if (!src) return null;
-    return { text: describeStep(src), detail: technicalDetail(src) };
+    let pre = null;
+    try { pre = (typeof src.meta === 'string' ? JSON.parse(src.meta) : src.meta)?.precondition || null; } catch {}
+    return { text: describeStep(src), detail: technicalDetail(src), precondition: pre };
   };
 
   const load = () =>
@@ -167,11 +169,16 @@ export default function Runs() {
               {detail.stepResults.map((s) => {
                 const label = stepLabel(s);
                 return (
-                <tr key={s.id}>
+                <tr key={s.id} style={label?.precondition ? { background: 'var(--surface2)' } : undefined}>
                   <td>{s.orderIndex + 1}</td>
                   <td>
                     {label ? (
                       <>
+                        {label.precondition && (
+                          <div className="muted" style={{ fontSize: 11, marginBottom: 2 }}>
+                            Önkoşul: {label.precondition.scenarioName}
+                          </div>
+                        )}
                         <div>{label.text}</div>
                         {label.detail && (
                           <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>{label.detail}</div>

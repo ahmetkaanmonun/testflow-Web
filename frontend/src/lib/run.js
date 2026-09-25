@@ -57,23 +57,68 @@ export async function fetchActiveProject() {
   }
 }
 
+function withMeta(step, extra) {
+  let meta = {};
+  try { meta = JSON.parse(step.meta || '{}'); } catch {}
+  return { ...step, meta: JSON.stringify({ ...meta, ...extra }) };
+}
+
+/** Önkoşul zinciri (koşum sırasıyla, her senaryo bir kez). */
+export async function fetchPreconditionChain(ids) {
+  if (!ids || ids.length === 0) return [];
+  return api(`/scenarios/precondition-chain?ids=${encodeURIComponent(ids.join(','))}`);
+}
+
 /**
  * Eklentiye gönderilecek koşum paketini hazırlar.
- * scenario: { id, startUrl, steps, timeoutMs } — editördeki kaydedilmemiş hali de olabilir.
+ * scenario: { id, startUrl, steps, timeoutMs, preconditionIds } — editördeki
+ * kaydedilmemiş hali de olabilir.
+ *
+ * Önkoşul varsa adım listesi: [önkoşul 1 adımları] → (önkoşul 2'nin adresine git →
+ * önkoşul 2 adımları) … → senaryonun başlangıç adresine git → senaryo adımları.
+ * Önkoşul adımları meta.precondition ile işaretlenir; biri başarısız olursa koşum
+ * 'blocked' sayılır. Ekleme için kullanıldığında (araya kayıt) scenario.steps
+ * yalnız ön adımları içerir; zincir yine başa eklenir.
  */
 export async function prepareRun({ scenario, environment = null, dataSet = null, project = null }) {
-  const steps = resolveBindings(scenario.steps || [], dataSet);
+  const chain = await fetchPreconditionChain(scenario.preconditionIds);
+  const combined = [];
+  chain.forEach((pre, k) => {
+    const tag = { precondition: { scenarioId: pre.id, scenarioName: pre.name } };
+    if (k > 0) {
+      combined.push(withMeta({ action: 'goto', candidates: '[]', value: applyEnvironment(pre.startUrl, environment),
+        dataBinding: null, sensitive: false, meta: '{}' }, { ...tag, synthetic: true }));
+    }
+    for (const st of pre.steps || []) combined.push(withMeta(st, tag));
+  });
+  if (chain.length > 0) {
+    combined.push(withMeta({ action: 'goto', candidates: '[]', value: applyEnvironment(scenario.startUrl, environment),
+      dataBinding: null, sensitive: false, meta: '{}' },
+      { synthetic: true, description: 'Önkoşullar tamam — senaryonun başlangıç adresine git' }));
+  }
+  combined.push(...(scenario.steps || []));
+
+  const firstUrl = chain.length > 0 ? chain[0].startUrl : scenario.startUrl;
   return {
-    startUrl: applyEnvironment(scenario.startUrl, environment),
-    steps,
+    startUrl: applyEnvironment(firstUrl, environment),
+    steps: resolveBindings(combined, dataSet),
     runConfig: { defaultTimeoutMs: resolveTimeout({ scenario, environment, project }).ms },
+    preconditionCount: combined.length - (scenario.steps || []).length,
   };
+}
+
+/** Sonuç bir önkoşul adımına mı ait? */
+export function isPreconditionResult(result) {
+  try { return !!JSON.parse(result.stepSnapshot || '{}')?.meta?.precondition; } catch { return false; }
 }
 
 /** Eklentiden dönen sonucun durumu. */
 export function runStatus(data) {
   const results = data.results || [];
-  if (data.aborted || results.some((r) => r.status === 'failed')) return 'failed';
+  const failed = results.find((r) => r.status === 'failed');
+  // Önkoşul sağlanamadıysa senaryonun kendisi test edilemedi: failed değil blocked
+  if (failed && isPreconditionResult(failed)) return 'blocked';
+  if (data.aborted || failed) return 'failed';
   return 'passed';
 }
 
@@ -99,11 +144,11 @@ export async function saveRun({ scenarioId, environmentId = null, testDataSetId 
  * Araya kayıt: 1..afterIndex+1 adımları oynatılır, sonra aynı sekmede kayıt başlar.
  * prepared.steps yalnızca oynatılacak ön adımları içermeli.
  */
-export function postStartRecordFrom(prepared, insertContext) {
-  window.postMessage({ type: 'TESTFLOW_START_RECORD_FROM', ...prepared, insertContext }, '*');
+export function postStartRecordFrom({ startUrl, steps, runConfig }, insertContext) {
+  window.postMessage({ type: 'TESTFLOW_START_RECORD_FROM', startUrl, steps, runConfig, insertContext }, '*');
 }
 
 /** Eklentiye koşum başlat mesajı. */
-export function postStartRun(prepared, runContext) {
-  window.postMessage({ type: 'TESTFLOW_START_RUN', ...prepared, runContext }, '*');
+export function postStartRun({ startUrl, steps, runConfig }, runContext) {
+  window.postMessage({ type: 'TESTFLOW_START_RUN', startUrl, steps, runConfig, runContext }, '*');
 }
