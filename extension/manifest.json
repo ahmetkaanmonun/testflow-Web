@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "TestFlow Recorder",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "TestFlow için web test kayıt ve koşum eklentisi (Chrome & Edge)",
   "permissions": [
     "tabs",
