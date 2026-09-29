@@ -32,7 +32,9 @@ public class ScenarioDtos {
             @NotBlank String startUrl,
             String folderId,
             String tags,
-            List<StepDto> steps) {}
+            List<StepDto> steps,
+            /* opsiyonel: önkoşullu kayıtla oluşturulan senaryolar */
+            List<String> preconditionIds) {}
 
     /**
      * null alanlar değişmez. timeoutMs 0 → temizlenir; preconditionIds boş liste → temizlenir;

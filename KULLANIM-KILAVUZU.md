@@ -38,15 +38,21 @@ Kayıt ve koşum, Chrome/Edge eklentisiyle yapılır.
 1. **Senaryolar → + Yeni Senaryo**
 2. Senaryo adını girin; başlangıç adresini **ortamdan seçin** ya da
    "Elle URL gir…" ile yazın
-3. **🔴 Kaydı Başlat** — hedef site yeni (tercihen gizli) pencerede açılır,
+3. *(Opsiyonel)* **Önkoşul** seçin — örn. daha önce kaydettiğiniz "Login".
+   Kayıttan önce önkoşul oynatılır, sonra başlangıç adresine gidilip kayıt
+   başlar; login adımlarını her senaryoda tekrar kaydetmezsiniz. Önkoşulda
+   şifre gibi test verisine bağlı değer varsa yanındaki listeden veri setini
+   seçin. Bu durumda başlangıç adresi olarak login sayfasını değil,
+   senaryonun başladığı sayfayı verin.
+4. **🔴 Kaydı Başlat** — hedef site yeni (tercihen gizli) pencerede açılır,
    sağ üstte kayıt çubuğu görünür
-4. Testi normal kullanır gibi yapın: tıklamalar, form doldurma, seçimler ve
+5. Testi normal kullanır gibi yapın: tıklamalar, form doldurma, seçimler ve
    **dosya seçimleri** otomatik adım olarak kaydedilir
-5. **Doğrulama eklemek için** (opsiyonel ama önerilir): çubuktaki yeşil
+6. **Doğrulama eklemek için** (opsiyonel ama önerilir): çubuktaki yeşil
    **✓ Doğrula** düğmesine basın → doğrulamak istediğiniz öğenin üzerine
    gelin (yeşil çerçeveyle vurgulanır) → tıklayın. "Bu metin/öğe görünüyor
    olmalı" anlamında bir adım eklenir ve normal kayda dönülür
-6. **Kaydı Bitir** — TestFlow'a dönersiniz, senaryo adımlarıyla hazırdır
+7. **Kaydı Bitir** — TestFlow'a dönersiniz, senaryo adımlarıyla hazırdır
 
 **Bilinmesi iyi olanlar:**
 - **Şifre alanları asla kaydedilmez** — kayıtta `***` olarak maskelenir.

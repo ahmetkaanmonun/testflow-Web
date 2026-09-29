@@ -135,6 +135,10 @@ public class ScenarioController {
         s.setTags(body.tags());
         s.setWorkspaceId(user.workspaceId());
         applySteps(s, body.steps());
+        if (body.preconditionIds() != null && !body.preconditionIds().isEmpty()) {
+            s.setPreconditionIds(PreconditionService.join(
+                    preconditions.validate(user.workspaceId(), null, body.preconditionIds())));
+        }
         return toDetail(scenarios.save(s));
     }
 

@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
-import { prepareRun, saveRun, postStartRun, fetchActiveProject } from '../lib/run';
+import { prepareRun, saveRun, postStartRun, postStartRecordFrom, fetchActiveProject } from '../lib/run';
 
 export default function Scenarios() {
   const [scenarios, setScenarios] = useState([]);
@@ -13,7 +13,9 @@ export default function Scenarios() {
   const [newFolderName, setNewFolderName] = useState('');
   const [error, setError] = useState('');
   const [extension, setExtension] = useState(null); // null=bilinmiyor, false=yok, string=versiyon
-  const [recording, setRecording] = useState(false);
+  const [recording, setRecording] = useState(false); // false | 'record' | 'pre' (önkoşullar oynatılıyor)
+  const [newPreIds, setNewPreIds] = useState([]);    // yeni senaryonun önkoşulları
+  const [newDataSet, setNewDataSet] = useState('');  // önkoşullarda test verisi varsa
   const [selected, setSelected] = useState(new Set());
   const [environments, setEnvironments] = useState([]);
   const [dataSets, setDataSets] = useState([]);
@@ -51,6 +53,35 @@ export default function Scenarios() {
         runDoneResolver.current = null;
       }
 
+      // Önkoşullu yeni senaryo kaydı: önkoşullar oynatıldı, sonra kayıt alındı
+      const newScenario = event.data.insertContext?.newScenario;
+      if (event.data.type === 'TESTFLOW_RECORDING_DONE' && newScenario) {
+        setRecording(false);
+        const steps = (event.data.steps || []).map((s, i) => ({ ...s, orderIndex: i, dataBinding: null }));
+        try {
+          const created = await api('/scenarios', {
+            method: 'POST',
+            body: JSON.stringify({ ...newScenario, steps }),
+          });
+          navigate(`/scenarios/${created.id}`);
+        } catch (e) {
+          setError(`Kayıt alındı ama senaryo kaydedilemedi: ${e.message}`);
+        }
+        return;
+      }
+      if (event.data.type === 'TESTFLOW_RECORD_FROM_FAILED' && newScenario) {
+        setRecording(false);
+        if (event.data.aborted) {
+          setError('Kayıt penceresi kapatıldı — senaryo oluşturulmadı.');
+          return;
+        }
+        const failed = (event.data.results || []).find((r) => r.status === 'failed');
+        let preName = '';
+        try { preName = JSON.parse(failed?.stepSnapshot || '{}')?.meta?.precondition?.scenarioName || ''; } catch {}
+        setError(`Önkoşul${preName ? ` "${preName}"` : ''} geçmedi, kayda geçilmedi: ${failed?.errorMessage || 'bilinmeyen hata'}`);
+        return;
+      }
+
       // insertContext'li kayıt mevcut senaryoya araya eklemedir — senaryo detayı işler
       if (event.data.type === 'TESTFLOW_RECORDING_DONE' && !event.data.insertContext) {
         setRecording(false);
@@ -80,20 +111,41 @@ export default function Scenarios() {
     return () => { window.removeEventListener('message', onMessage); clearTimeout(timeout); };
   }, [navigate]);
 
-  const startRecording = () => {
+  const startRecording = async () => {
     if (!name || !startUrl) return;
+    setError('');
     recordMeta.current = { folderId: selectedFolder || null };
-    setRecording(true);
-    window.postMessage({ type: 'TESTFLOW_START_RECORDING', scenarioName: name, startUrl }, '*');
+
+    if (newPreIds.length === 0) {
+      setRecording('record');
+      window.postMessage({ type: 'TESTFLOW_START_RECORDING', scenarioName: name, startUrl }, '*');
+      return;
+    }
+
+    // Önkoşullu kayıt: önce önkoşullar (örn. Login) oynatılır, ardından senaryonun
+    // başlangıç adresine gidilir ve aynı pencerede kayıt başlar. Böylece login
+    // adımları yeni senaryoya tekrar kaydedilmez.
+    try {
+      const environment = environments.find((en) => startUrl.startsWith(en.baseUrl)) || null;
+      const dataSet = newDataSet ? dataSets.find((d) => d.id === newDataSet) : null;
+      const prepared = await prepareRun({
+        scenario: { startUrl, steps: [], preconditionIds: newPreIds },
+        environment, dataSet, project: await fetchActiveProject(),
+      });
+      setRecording('pre');
+      postStartRecordFrom(prepared, {
+        newScenario: { name, startUrl, folderId: selectedFolder || null, preconditionIds: newPreIds },
+      });
+    } catch (e) { setError(e.message); }
   };
 
   const createEmpty = async () => {
     try {
       const created = await api('/scenarios', {
         method: 'POST',
-        body: JSON.stringify({ name, startUrl, folderId: selectedFolder || null, steps: [] }),
+        body: JSON.stringify({ name, startUrl, folderId: selectedFolder || null, steps: [], preconditionIds: newPreIds }),
       });
-      setName(''); setStartUrl(''); setShowNew(false);
+      setName(''); setStartUrl(''); setShowNew(false); setNewPreIds([]);
       navigate(`/scenarios/${created.id}`);
     } catch (e) { setError(e.message); }
   };
@@ -251,9 +303,48 @@ export default function Scenarios() {
             </div>
           )}
 
+          {!recording && scenarios.length > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                <span className="muted" style={{ fontSize: 13 }}>Önkoşul:</span>
+                {newPreIds.map((pid) => (
+                  <span key={pid} className="badge queued" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                    {scenarios.find((x) => x.id === pid)?.name ?? pid}
+                    <button className="ghost" style={{ padding: '0 4px', fontSize: 12 }}
+                            onClick={() => setNewPreIds((prev) => prev.filter((x) => x !== pid))}
+                            aria-label="Önkoşulu kaldır">✕</button>
+                  </span>
+                ))}
+                <select value="" onChange={(e) => e.target.value && setNewPreIds((prev) => [...prev, e.target.value])}
+                        style={{ width: 240 }}>
+                  <option value="">{newPreIds.length ? '＋ Başka önkoşul…' : 'Yok (örn. Login seçin)'}</option>
+                  {scenarios.filter((x) => !newPreIds.includes(x.id)).map((x) => (
+                    <option key={x.id} value={x.id}>{x.name}</option>
+                  ))}
+                </select>
+                {newPreIds.length > 0 && (
+                  <select value={newDataSet} onChange={(e) => setNewDataSet(e.target.value)} style={{ width: 220 }}
+                          title="Önkoşul adımlarında test verisine bağlı değer (örn. şifre) varsa gerekir">
+                    <option value="">Veri seti: yok</option>
+                    {dataSets.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                  </select>
+                )}
+              </div>
+              {newPreIds.length > 0 && (
+                <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                  Kayıttan önce önkoşullar oynatılır, sonra yukarıdaki başlangıç adresine gidilip kayıt başlar —
+                  login adımlarını tekrar kaydetmezsiniz. Başlangıç adresi olarak login sayfasını değil,
+                  senaryonun başladığı sayfayı verin.
+                </div>
+              )}
+            </div>
+          )}
+
           {recording ? (
             <div className="badge queued" style={{ padding: '8px 14px' }}>
-              🔴 Kayıt sürüyor — açılan sekmede işlemlerinizi yapın, bitince "Kaydı Bitir"e basın.
+              {recording === 'pre'
+                ? '▶ Önkoşullar oynatılıyor — bitince kayıt çubuğu görünecek, işlemlerinizi yapıp "Kaydı Bitir"e basın.'
+                : '🔴 Kayıt sürüyor — açılan sekmede işlemlerinizi yapın, bitince "Kaydı Bitir"e basın.'}
             </div>
           ) : (
             <div className="row">
