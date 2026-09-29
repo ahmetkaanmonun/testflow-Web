@@ -33,6 +33,17 @@ public class Scenario {
     @Column(columnDefinition = "TEXT")
     private String tags;
 
+    /** Açıklayıcı önkoşul metni (örn. "Kullanıcının onay yetkisi olmalı"). */
+    @Column(columnDefinition = "TEXT")
+    private String preconditionText;
+
+    /** Önce koşulacak senaryoların id'leri, sıralı ve virgülle ayrılmış (aynı proje). */
+    @Column(columnDefinition = "TEXT")
+    private String preconditionIds;
+
+    /** Senaryo geneli locator bekleme süresi (ms); boşsa ortam/proje varsayılanı. */
+    private Integer timeoutMs;
+
     @OneToMany(mappedBy = "scenario", cascade = CascadeType.ALL, orphanRemoval = true)
     @OrderBy("orderIndex ASC")
     private List<Step> steps = new ArrayList<>();

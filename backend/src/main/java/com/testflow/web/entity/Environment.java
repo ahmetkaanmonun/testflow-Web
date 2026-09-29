@@ -24,6 +24,9 @@ public class Environment {
     @Column(name = "workspace_id", nullable = false)
     private String workspaceId;
 
+    /** Bu ortamda koşarken locator bekleme süresi (ms); boşsa proje varsayılanı. */
+    private Integer defaultTimeoutMs;
+
     @Column(updatable = false, nullable = false)
     private Instant createdAt = Instant.now();
 }

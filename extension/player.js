@@ -10,6 +10,7 @@
   if (!state || !state.playing) return;
 
   const { steps } = state;
+  const runConfig = state.runConfig || {};
   let index = state.index;
 
   // ---------- Koşum çubuğu ----------
@@ -61,23 +62,56 @@
     return r.width > 0 && r.height > 0;
   }
 
+  function isDisabled(el) {
+    return !!(el.disabled || el.getAttribute('aria-disabled') === 'true' || el.closest('fieldset[disabled]'));
+  }
+
+  // Elementin merkezi başka bir katmanın (loading overlay, modal arkası) altında mı?
+  function isCovered(el) {
+    let r = el.getBoundingClientRect();
+    if (r.bottom < 0 || r.top > innerHeight || r.right < 0 || r.left > innerWidth) {
+      try { el.scrollIntoView({ block: 'center' }); } catch {}
+      r = el.getBoundingClientRect();
+    }
+    const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    if (!top) return false; // ölçülemiyorsa engelleme
+    return !(top === el || el.contains(top) || top.contains(el) ||
+             (top.tagName === 'LABEL' && top.control === el));
+  }
+
+  // Bekleme koşulu: exists = DOM'da var; visible = görünür (varsayılan);
+  // enabled = görünür + aktif + üstü kapalı değil (tıklanabilir).
+  // Click adımlarında disabled eleman her koşulda beklenir — disabled butona
+  // tıklamak hiçbir şey yapmaz, beklemek her zaman daha doğrudur.
+  function isReady(el, waitFor, action) {
+    if (!el) return false;
+    const fileInput = el.tagName === 'INPUT' && el.type === 'file';
+    if (waitFor === 'exists') return true;
+    if (!isVisible(el) && !fileInput) return false;
+    if (action === 'click' && isDisabled(el)) return false;
+    if (waitFor === 'enabled') return !isDisabled(el) && (fileInput || !isCovered(el));
+    return true;
+  }
+
   // Adayları skorla dener; 5sn boyunca 250ms'de bir yeniden dener (sayfa yükleniyor olabilir).
   // validate: bulunan elemanın adım için uygunluğunu doğrular (yanlış elemana
   // "iyileşme" adı altında işlem yapılmasını engeller).
-  async function findElement(candidates, validate, timeoutMs = 5000) {
+  async function findElement(candidates, validate, timeoutMs = 5000, waitFor = 'visible', action = null) {
     const sorted = [...candidates].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
     const deadline = Date.now() + timeoutMs;
+    let seenNotReady = false; // element var ama koşul sağlanmadı (hata mesajı için)
     while (Date.now() < deadline) {
       for (let i = 0; i < sorted.length; i++) {
         const el = findByCandidate(sorted[i]);
-        const visibleOk = isVisible(el) || (el && validate && el.tagName === 'INPUT' && el.type === 'file');
-        if (el && visibleOk && (!validate || validate(el))) {
+        if (!el || (validate && !validate(el))) continue;
+        if (isReady(el, waitFor, action)) {
           return { el, usedIndex: i, strategy: sorted[i].strategy };
         }
+        seenNotReady = true;
       }
       await sleep(250);
     }
-    return null;
+    return { notFound: true, seenNotReady };
   }
 
   // Adım türüne göre eleman doğrulayıcı üret
@@ -140,12 +174,94 @@
   }
 
   // ---------- Adım çalıştırma ----------
+  // Koşulan adımın tanımının kopyası: senaryo sonradan değişse de geçmiş koşum okunur.
+  // Koşumdaki adımların value'su test veri setinden çözülmüş olabilir — hassas veya
+  // veri setine bağlı adımlarda değer ASLA snapshot'a yazılmaz.
+  function snapshotOf(step) {
+    let target = null;
+    let bindingKey = null;
+    try {
+      const cands = JSON.parse(step.candidates || '[]');
+      if (cands.length) target = { strategy: cands[0].strategy, value: String(cands[0].value).slice(0, 200) };
+    } catch {}
+    try { if (step.dataBinding) bindingKey = JSON.parse(step.dataBinding).dataSetKey ?? null; } catch {}
+    let meta = null;
+    try { meta = JSON.parse(step.meta || '{}'); } catch {}
+    const hideValue = step.sensitive || !!step.dataBinding;
+    return JSON.stringify({
+      action: step.action,
+      target,
+      value: hideValue ? null : (step.value ?? null),
+      dataBindingKey: bindingKey,
+      sensitive: !!step.sensitive,
+      meta,
+    });
+  }
+
+  // Hata mesajları için adımın hedefini doğal dille an: "'Giriş Yap' butonu"
+  // (frontend/src/lib/describe.js ile aynı sözlük — eklenti oradan import edemez)
+  const KIND_NOM = { button: 'butonu', link: 'bağlantısı', field: 'alanı', file: 'dosya alanı',
+    select: 'listesi', checkbox: 'onay kutusu', radio: 'seçeneği', option: 'seçeneği', element: 'öğesi' };
+  const KIND_BARE = { button: 'Buton', link: 'Bağlantı', field: 'Alan', file: 'Dosya alanı',
+    select: 'Liste', checkbox: 'Onay kutusu', radio: 'Seçenek', option: 'Seçenek', element: 'Öğe' };
+  function targetName(step) {
+    let meta = {};
+    try { meta = JSON.parse(step.meta || '{}'); } catch {}
+    let kind = meta.elementKind;
+    if (!kind) {
+      kind = step.action === 'fill' || step.action === 'press' ? 'field'
+        : step.action === 'select' ? 'select' : step.action === 'upload' ? 'file' : 'element';
+    }
+    let label = meta.label;
+    if (!label) {
+      try {
+        const c = JSON.parse(step.candidates || '[]')[0];
+        if (c && ['aria-label', 'placeholder', 'text', 'name', 'id', 'data-testid'].includes(c.strategy)) label = c.value;
+      } catch {}
+    }
+    label = String(label || '').replace(/\s+/g, ' ').trim().slice(0, 50);
+    return label ? `'${label}' ${KIND_NOM[kind] || 'öğesi'}` : (KIND_BARE[kind] || 'Öğe');
+  }
+  const secs = (ms) => String(Math.round(ms / 100) / 10).replace('.', ',');
+
+  function resultBase(stepIndex, step) {
+    return { orderIndex: stepIndex, stepId: step.id ?? null, stepSnapshot: snapshotOf(step) };
+  }
+
+  // Adım zamanlaması (epoch ms): startedAt = adım başladı, locatedAt = element
+  // bulundu (bekleme bitti), finishedAt = sonuç raporlandı. Click/press sonucu
+  // aksiyondan ÖNCE raporlandığı için onlarda finishedAt aksiyon anıdır.
+  let timing = { startedAt: null, locatedAt: null };
+
   // reportResult: sonucu background'a yazar (index ilerler)
   async function reportResult(stepIndex, step, result) {
     await chrome.runtime.sendMessage({
       type: 'STEP_RESULT',
-      result: { orderIndex: stepIndex, stepId: step.id ?? null, ...result },
+      result: {
+        ...resultBase(stepIndex, step),
+        startedAt: timing.startedAt,
+        locatedAt: timing.locatedAt,
+        finishedAt: Date.now(),
+        ...result,
+      },
     });
+  }
+
+  // Bekleme süresi önceliği: adım (meta.timeoutMs) → koşum varsayılanı (senaryo →
+  // ortam → proje, arayüzde çözülür) → 5 sn. Adımda açıkça süre verilmediyse
+  // eski oranlar korunur: doğrulama adımları 2,4 kat (5→12 sn; sayfa geçişi
+  // sonrasına denk gelirler), opsiyonel adımlar 0,6 kat (5→3 sn; gelmeyen
+  // modallar koşumu bekletmesin).
+  function resolveWait(step, optional) {
+    let meta = {};
+    try { meta = JSON.parse(step.meta || '{}'); } catch {}
+    const clamp = (ms) => Math.min(Math.max(ms, 500), 60000);
+    const waitFor = ['exists', 'visible', 'enabled'].includes(meta.waitFor) ? meta.waitFor : 'visible';
+    const own = Number(meta.timeoutMs);
+    if (own > 0) return { timeoutMs: clamp(own), waitFor };
+    const base = Number(runConfig.defaultTimeoutMs) > 0 ? Number(runConfig.defaultTimeoutMs) : 5000;
+    const factor = step.action.startsWith('assert') ? 2.4 : (optional ? 0.6 : 1);
+    return { timeoutMs: clamp(Math.round(base * factor)), waitFor };
   }
 
   async function captureScreenshot() {
@@ -156,6 +272,7 @@
   }
 
   async function executeStep(step, stepIndex) {
+    timing = { startedAt: Date.now(), locatedAt: null };
     // Opsiyonel adım: başarısızlık koşumu kesmez, 'skipped' olarak geçilir
     // (bazı kayıtlarda alan dolu/kilitli gelir veya hiç görünmez).
     let optional = false;
@@ -168,6 +285,28 @@
     const failStatus = optional ? 'skipped' : 'failed';
     const failPrefix = optional ? 'Opsiyonel adım atlandı — ' : '';
 
+    // goto: adrese git — element gerektirmez. Rapor ÖNCE (navigasyon script'i öldürür);
+    // yeni sayfada player kaldığı index'ten devam eder.
+    if (step.action === 'goto') {
+      let url;
+      try { url = new URL(String(step.value || '').trim(), location.href).href; } catch {}
+      if (!url) {
+        const r = { status: failStatus, healed: false, errorMessage: failPrefix + `Geçersiz adres: "${step.value}"` };
+        await reportResult(stepIndex, step, r);
+        return r;
+      }
+      const r = { status: 'passed', healed: false, healedStrategy: null };
+      await reportResult(stepIndex, step, r);
+      const current = location.href;
+      const hashOnly = url !== current && url.split('#')[0] === current.split('#')[0];
+      if (url === current) location.reload();
+      else location.href = url;
+      // Gerçek sayfa geçişinde script ölür; o arada döngü ilerlemesin.
+      // Yalnız hash değiştiyse sayfa yenilenmez, beklemeden devam edilir.
+      if (!hashOnly) await sleep(10000);
+      return r;
+    }
+
     // wait: element gerektirmez — belirtilen saniye kadar bekle (üst sınır 60sn)
     if (step.action === 'wait') {
       const secs = Math.min(Math.max(parseFloat(step.value) || 1, 0.1), 60);
@@ -178,19 +317,21 @@
     }
 
     const candidates = JSON.parse(step.candidates || '[]');
-    // Doğrulama adımları sayfa geçişi/yavaş yükleme sonrasına denk gelir —
-    // onlara daha uzun bekleme tanınır (12sn). Opsiyonel adımlar (örn. bazen
-    // gelen modal kapatma) kısa bekler (3sn) ki modal gelmeyen sayfalarda
-    // koşum gereksiz duraksamasın. Diğer adımlar 5sn.
-    const timeoutMs = step.action.startsWith('assert') ? 12000 : (optional ? 3000 : 5000);
-    const found = await findElement(candidates, validatorFor(step), timeoutMs);
-    if (!found) {
+    const { timeoutMs, waitFor } = resolveWait(step, optional);
+    const found = await findElement(candidates, validatorFor(step), timeoutMs, waitFor, step.action);
+    if (found.notFound) {
+      const why = found.seenNotReady
+        ? (waitFor === 'enabled' ? 'tıklanabilir hale gelmedi (pasif veya üstü başka bir katmanla kapalı)'
+                                 : 'ekranda görünür hale gelmedi')
+        : 'ekranda bulunamadı';
       const r = { status: failStatus, healed: false,
-        errorMessage: failPrefix + 'Element bulunamadı (tüm locator adayları denendi; tür uyumsuz eşleşmeler reddedildi).',
+        errorMessage: failPrefix + `${targetName(step)} ${secs(timeoutMs)} sn içinde ${why}. ` +
+          '(Tüm locator adayları denendi; türü uymayan eşleşmeler reddedildi.)',
         screenshot: await captureScreenshot() };
       await reportResult(stepIndex, step, r);
       return r;
     }
+    timing.locatedAt = Date.now();
     const healed = found.usedIndex > 0;
     const healedStrategy = healed ? found.strategy : null;
 
@@ -323,7 +464,7 @@
         // değişir ("İş Listesi" → "Dosya Listeleme" gibi). Bu yüzden elementi
         // ve metni BİRLİKTE, süre dolana dek yeniden kontrol ederiz — sayfa
         // yeniden render edilse bile her turda taze element üzerinden bakılır.
-        const deadline = Date.now() + 12000;
+        const deadline = Date.now() + timeoutMs;
         let lastActual = (found.el.innerText || found.el.value || '').trim();
         let lastHealed = healed;
         let lastStrategy = healedStrategy;
@@ -335,8 +476,8 @@
             return r;
           }
           await sleep(400);
-          const again = await findElement(candidates, validatorFor(step), 600);
-          if (again) {
+          const again = await findElement(candidates, validatorFor(step), 600, waitFor, step.action);
+          if (!again.notFound) {
             lastActual = (again.el.innerText || again.el.value || '').trim();
             lastHealed = again.usedIndex > 0;
             lastStrategy = lastHealed ? again.strategy : null;
@@ -344,7 +485,7 @@
         }
         const r = { status: failStatus, healed: lastHealed, healedStrategy: lastStrategy,
                  screenshot: await captureScreenshot(),
-                 errorMessage: failPrefix + `Metin doğrulaması başarısız — beklenen: "${expected.slice(0,80)}", bulunan: "${lastActual.slice(0,80)}"` };
+                 errorMessage: failPrefix + `${targetName(step)} beklenen metni içermiyor. Beklenen: "${expected.slice(0,80)}", ekranda görünen: "${lastActual.slice(0,80)}"` };
         await reportResult(stepIndex, step, r);
         return r;
       } else {
@@ -362,7 +503,7 @@
   // ---------- Ana döngü ----------
   while (index < steps.length) {
     const step = steps[index];
-    setBar(`adım ${index + 1}/${steps.length} (${step.action})`);
+    setBar(`adım ${index + 1}/${steps.length}: ${targetName(step)} (${step.action})`);
 
     const result = await executeStep(step, index); // sonuç executeStep içinde raporlanır
 
@@ -371,7 +512,7 @@
       for (let j = index + 1; j < steps.length; j++) {
         await chrome.runtime.sendMessage({
           type: 'STEP_RESULT',
-          result: { orderIndex: j, stepId: steps[j].id ?? null, status: 'skipped', healed: false },
+          result: { ...resultBase(j, steps[j]), status: 'skipped', healed: false },
         });
       }
       break;
@@ -384,5 +525,6 @@
   }
 
   setBar('tamamlandı, sonuçlar gönderiliyor…');
-  await chrome.runtime.sendMessage({ type: 'PLAY_DONE' });
+  const done = await chrome.runtime.sendMessage({ type: 'PLAY_DONE' });
+  if (done && done.recording) barEl.remove(); // araya kayıt: aynı sekmede kayıt başladı
 })();

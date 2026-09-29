@@ -1,5 +1,8 @@
 import { useEffect, useState, useRef } from 'react';
 import { api } from '../lib/api';
+import { prepareRun, saveRun, postStartRun, fetchActiveProject } from '../lib/run';
+import { describeStep, technicalDetail } from '../lib/describe';
+import { formatDateTime, formatTimeMs, formatOffset, formatDuration, diffMs } from '../lib/format';
 
 export default function Runs() {
   const [runs, setRuns] = useState([]);
@@ -24,22 +27,18 @@ export default function Runs() {
     } catch { /* senaryo silinmiş olabilir — adım tanımları görünmez, sorun değil */ }
   };
 
-  // Adımı insan diline çevir: aksiyon + hedef + değer
+  // Adımı doğal dille anlat. Öncelik koşum anındaki snapshot'ta (o an ne
+  // koşulduysa o); eski kayıtlarda snapshot yoksa senaryonun güncel adımına düşülür.
   const stepLabel = (result) => {
-    const st = result.stepId ? detailSteps[result.stepId] : null;
-    if (!st) return null;
-    let target = '';
-    try {
-      const cands = JSON.parse(st.candidates || '[]');
-      if (cands.length) target = `${cands[0].strategy}=${String(cands[0].value).slice(0, 30)}`;
-    } catch {}
-    let value = '';
-    if (st.dataBinding) {
-      try { value = ` → 📎 ${JSON.parse(st.dataBinding).dataSetKey}`; } catch {}
-    } else if (st.value && ['fill', 'select', 'assert-text'].includes(st.action)) {
-      value = st.sensitive ? ' → ••••' : ` → "${String(st.value).slice(0, 25)}"`;
+    let src = null;
+    if (result.stepSnapshot) {
+      try { src = JSON.parse(result.stepSnapshot); } catch {}
     }
-    return { action: st.action, detail: `${target}${value}` };
+    if (!src && result.stepId) src = detailSteps[result.stepId] || null;
+    if (!src) return null;
+    let pre = null;
+    try { pre = (typeof src.meta === 'string' ? JSON.parse(src.meta) : src.meta)?.precondition || null; } catch {}
+    return { text: describeStep(src), detail: technicalDetail(src), precondition: pre };
   };
 
   const load = () =>
@@ -63,20 +62,12 @@ export default function Runs() {
       rerunCtx.current = null;
       setRerunning(null);
 
-      const results = event.data.results || [];
-      const anyFailed = results.some((r) => r.status === 'failed');
       try {
-        await api('/runs', {
-          method: 'POST',
-          body: JSON.stringify({
-            scenarioId: ctx.scenarioId,
-            environmentId: ctx.environmentId,
-            testDataSetId: ctx.testDataSetId,
-            status: event.data.aborted ? 'failed' : (anyFailed ? 'failed' : 'passed'),
-            startedAt: event.data.startedAt,
-            finishedAt: event.data.finishedAt,
-            stepResults: results,
-          }),
+        await saveRun({
+          scenarioId: ctx.scenarioId,
+          environmentId: ctx.environmentId,
+          testDataSetId: ctx.testDataSetId,
+          data: event.data,
         });
         await load();
       } catch (err) { setError(err.message); }
@@ -93,33 +84,16 @@ export default function Runs() {
       const scenario = await api(`/scenarios/${run.scenarioId}`);
       if (!scenario.steps?.length) throw new Error('Senaryoda adım yok.');
 
-      // Test verisi çözümü
-      let byKey = {};
-      if (run.testDataSetId) {
-        const set = await api(`/test-data-sets/${run.testDataSetId}`);
-        byKey = Object.fromEntries(JSON.parse(set.entries).map((en) => [en.key, en]));
-      }
-      const steps = scenario.steps.map((s) => {
-        if (!s.dataBinding) return s;
-        const key = JSON.parse(s.dataBinding).dataSetKey;
-        const entry = byKey[key];
-        if (entry === undefined) {
-          throw new Error(`"${key}" anahtarı koşumun test veri setinde yok — set silinmiş/değişmiş olabilir. Senaryo sayfasından koşun.`);
-        }
-        return { ...s, value: entry.value, ...(entry.type === 'file' ? { fileName: entry.fileName } : {}) };
-      });
-
-      // Ortam çözümü
-      let startUrl = scenario.startUrl;
-      if (run.environmentId) {
-        const envs = await api('/environments');
-        const env = envs.find((en) => en.id === run.environmentId);
-        if (env) {
-          try {
-            const u = new URL(scenario.startUrl);
-            startUrl = new URL(env.baseUrl).origin + u.pathname + u.search + u.hash;
-          } catch { startUrl = env.baseUrl; }
-        }
+      const dataSet = run.testDataSetId ? await api(`/test-data-sets/${run.testDataSetId}`) : null;
+      const environment = run.environmentId
+        ? (await api('/environments')).find((en) => en.id === run.environmentId) || null
+        : null;
+      const project = await fetchActiveProject();
+      let prepared;
+      try {
+        prepared = await prepareRun({ scenario, environment, dataSet, project });
+      } catch (err) {
+        throw new Error(`${err.message} Veri seti silinmiş/değişmiş olabilir — senaryo sayfasından koşun.`);
       }
 
       rerunCtx.current = {
@@ -128,12 +102,7 @@ export default function Runs() {
         testDataSetId: run.testDataSetId || null,
       };
       setRerunning(run.id);
-      window.postMessage({
-        type: 'TESTFLOW_START_RUN',
-        startUrl,
-        steps,
-        runContext: rerunCtx.current,
-      }, '*');
+      postStartRun(prepared, rerunCtx.current);
     } catch (err) { setError(err.message); }
   };
 
@@ -189,23 +158,56 @@ export default function Runs() {
             <strong>{scenarioName(detail.scenarioId)} — adım sonuçları</strong>
             <button className="ghost" onClick={() => setDetail(null)}>Kapat</button>
           </div>
+          <div className="row muted" style={{ fontSize: 13, marginBottom: 12, gap: 20 }}>
+            <span>Başlangıç: <b>{formatDateTime(detail.startedAt)}</b></span>
+            <span>Bitiş: <b>{formatDateTime(detail.finishedAt)}</b></span>
+            <span>Toplam süre: <b>{formatDuration(diffMs(detail.startedAt, detail.finishedAt))}</b></span>
+          </div>
           <table>
-            <thead><tr><th>#</th><th>Adım</th><th>Durum</th><th>Healed</th><th>Hata</th><th>Görüntü</th></tr></thead>
+            <thead><tr><th>#</th><th>Adım</th><th>Durum</th><th>Zaman</th><th>Süre</th><th>Healed</th><th>Hata</th><th>Görüntü</th></tr></thead>
             <tbody>
               {detail.stepResults.map((s) => {
                 const label = stepLabel(s);
                 return (
-                <tr key={s.id}>
+                <tr key={s.id} style={label?.precondition ? { background: 'var(--surface2)' } : undefined}>
                   <td>{s.orderIndex + 1}</td>
                   <td>
                     {label ? (
                       <>
-                        <code>{label.action}</code>
-                        <div className="muted" style={{ fontSize: 12, marginTop: 3 }}>{label.detail}</div>
+                        {label.precondition && (
+                          <div className="muted" style={{ fontSize: 11, marginBottom: 2 }}>
+                            Önkoşul: {label.precondition.scenarioName}
+                          </div>
+                        )}
+                        <div>{label.text}</div>
+                        {label.detail && (
+                          <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>{label.detail}</div>
+                        )}
                       </>
-                    ) : <span className="muted">adım tanımı yok (senaryo değişmiş/silinmiş olabilir)</span>}
+                    ) : <span className="muted">adım tanımı yok (eski kayıt, senaryo silinmiş olabilir)</span>}
                   </td>
                   <td><span className={`badge ${s.status}`}>{s.status}</span></td>
+                  <td style={{ whiteSpace: 'nowrap' }}>
+                    {s.startedAt ? (
+                      <>
+                        <div title={formatDateTime(s.startedAt)}>{formatTimeMs(s.startedAt)}</div>
+                        <div className="muted" style={{ fontSize: 12 }}>{formatOffset(s.startedAt, detail.startedAt)}</div>
+                      </>
+                    ) : <span className="muted">—</span>}
+                  </td>
+                  <td style={{ whiteSpace: 'nowrap' }}>
+                    {s.startedAt && s.finishedAt ? (
+                      <>
+                        <div>{formatDuration(diffMs(s.startedAt, s.finishedAt))}</div>
+                        {s.locatedAt && (
+                          <div className="muted" style={{ fontSize: 12 }}
+                               title="Elementin ekranda bulunmasına kadar geçen süre">
+                            bekleme {formatDuration(diffMs(s.startedAt, s.locatedAt))}
+                          </div>
+                        )}
+                      </>
+                    ) : <span className="muted">—</span>}
+                  </td>
                   <td>{s.healed ? `✓ (${s.healedStrategy ?? '-'})` : '—'}</td>
                   <td className="muted">{s.errorMessage ?? '—'}</td>
                   <td>

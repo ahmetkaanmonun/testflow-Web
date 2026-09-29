@@ -60,11 +60,14 @@ ve birbirlerinin senaryolarını göremezler — izolasyon demosu için ideal.
 
 ## Özellikler
 
-- Senaryo CRUD + adım editörü (sıralama, taşıma, silme)
+- Senaryo CRUD + adım editörü (sıralama, taşıma, silme, **araya kayıtla adım ekleme**)
+- **Doğal dil adımlar:** "'Giriş Yap' butonuna tıkla" — düzenlenebilir açıklama
+- **Önkoşullar:** senaryo, başka senaryoları (örn. Login) önce koşar; başarısızsa `blocked`
+- **Bekleme süresi:** adım → senaryo → ortam → proje; görünür / tıklanabilir / var koşulu
 - **Test verisi bağlama:** adım değeri sabit yazılabilir veya test veri
   setindeki bir anahtara bağlanabilir (📎). Gizli alanlar maskelenir.
 - Klasörler, ortamlar (environment), test veri setleri
-- Koşum geçmişi + adım bazlı sonuçlar (healed bilgisiyle)
+- Koşum geçmişi + adım bazlı sonuçlar (healed bilgisi, adım saati, süre ve bekleme süresiyle)
 - H2 console: http://localhost:8080/h2-console (JDBC URL: `jdbc:h2:mem:testflowdb`, user: `sa`)
 
 ## Gerçek Active Directory'ye geçiş

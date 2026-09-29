@@ -21,7 +21,10 @@ import java.util.List;
 @RequestMapping("/api/projects")
 public class ProjectController {
 
-    public record ProjectDto(String id, String name, boolean personal, String ownerUsername, boolean active) {}
+    public record ProjectDto(String id, String name, boolean personal, String ownerUsername, boolean active,
+                             Integer defaultTimeoutMs) {}
+    /** defaultTimeoutMs 0 → temizlenir (sistem varsayılanı). */
+    public record UpdateProjectRequest(Integer defaultTimeoutMs) {}
     public record CreateProjectRequest(@NotBlank String name) {}
     public record MemberDto(String username, String addedBy, Instant createdAt, boolean owner) {}
     public record AddMemberRequest(@NotBlank String username) {}
@@ -41,7 +44,7 @@ public class ProjectController {
         AuthenticatedUser user = CurrentUser.from(req);
         return workspaceService.listFor(user.username()).stream()
                 .map(w -> new ProjectDto(w.getId(), w.getName(), w.isPersonal(),
-                        w.getOwnerUsername(), w.getId().equals(user.workspaceId())))
+                        w.getOwnerUsername(), w.getId().equals(user.workspaceId()), w.getDefaultTimeoutMs()))
                 .toList();
     }
 
@@ -50,7 +53,19 @@ public class ProjectController {
     public ProjectDto create(@Valid @RequestBody CreateProjectRequest body, HttpServletRequest req) {
         AuthenticatedUser user = CurrentUser.from(req);
         Workspace ws = workspaceService.create(body.name().trim(), user.username());
-        return new ProjectDto(ws.getId(), ws.getName(), false, ws.getOwnerUsername(), false);
+        return new ProjectDto(ws.getId(), ws.getName(), false, ws.getOwnerUsername(), false, null);
+    }
+
+    /** Proje ayarları — her üye güncelleyebilir. */
+    @PatchMapping("/{id}")
+    public ProjectDto update(@PathVariable String id, @RequestBody UpdateProjectRequest body, HttpServletRequest req) {
+        AuthenticatedUser user = CurrentUser.from(req);
+        workspaceService.assertMember(id, user.username());
+        Workspace ws = workspaceService.updateSettings(id,
+                body.defaultTimeoutMs() == null ? null : Timeouts.normalize(body.defaultTimeoutMs()),
+                body.defaultTimeoutMs() != null);
+        return new ProjectDto(ws.getId(), ws.getName(), ws.isPersonal(), ws.getOwnerUsername(),
+                ws.getId().equals(user.workspaceId()), ws.getDefaultTimeoutMs());
     }
 
     /** Aktif projeyi değiştirir — yeni JWT döner. */

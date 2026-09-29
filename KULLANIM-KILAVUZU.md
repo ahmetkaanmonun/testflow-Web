@@ -38,15 +38,21 @@ Kayıt ve koşum, Chrome/Edge eklentisiyle yapılır.
 1. **Senaryolar → + Yeni Senaryo**
 2. Senaryo adını girin; başlangıç adresini **ortamdan seçin** ya da
    "Elle URL gir…" ile yazın
-3. **🔴 Kaydı Başlat** — hedef site yeni (tercihen gizli) pencerede açılır,
+3. *(Opsiyonel)* **Önkoşul** seçin — örn. daha önce kaydettiğiniz "Login".
+   Kayıttan önce önkoşul oynatılır, sonra başlangıç adresine gidilip kayıt
+   başlar; login adımlarını her senaryoda tekrar kaydetmezsiniz. Önkoşulda
+   şifre gibi test verisine bağlı değer varsa yanındaki listeden veri setini
+   seçin. Bu durumda başlangıç adresi olarak login sayfasını değil,
+   senaryonun başladığı sayfayı verin.
+4. **🔴 Kaydı Başlat** — hedef site yeni (tercihen gizli) pencerede açılır,
    sağ üstte kayıt çubuğu görünür
-4. Testi normal kullanır gibi yapın: tıklamalar, form doldurma, seçimler ve
+5. Testi normal kullanır gibi yapın: tıklamalar, form doldurma, seçimler ve
    **dosya seçimleri** otomatik adım olarak kaydedilir
-5. **Doğrulama eklemek için** (opsiyonel ama önerilir): çubuktaki yeşil
+6. **Doğrulama eklemek için** (opsiyonel ama önerilir): çubuktaki yeşil
    **✓ Doğrula** düğmesine basın → doğrulamak istediğiniz öğenin üzerine
    gelin (yeşil çerçeveyle vurgulanır) → tıklayın. "Bu metin/öğe görünüyor
    olmalı" anlamında bir adım eklenir ve normal kayda dönülür
-6. **Kaydı Bitir** — TestFlow'a dönersiniz, senaryo adımlarıyla hazırdır
+7. **Kaydı Bitir** — TestFlow'a dönersiniz, senaryo adımlarıyla hazırdır
 
 **Bilinmesi iyi olanlar:**
 - **Şifre alanları asla kaydedilmez** — kayıtta `***` olarak maskelenir.
@@ -60,8 +66,47 @@ Senaryo detayında:
 
 - **Ad** başlığa tıklanarak, **başlangıç URL** ortam seçilerek ya da elle,
   **klasör** yanındaki listeden değiştirilir — sonra **Kaydet**
-- Adımlar **↑ ↓** ile taşınır, **✕** ile silinir, **+ Adım Ekle** ile eklenir
-- Her adımın altında ilk locator bilgisi görünür (hangi öğeyi hedeflediği)
+- Adımlar **↑ ↓** ile taşınır, **✕** ile silinir
+- Her adımın üstünde ne yaptığı düz Türkçe yazar ("'Giriş Yap' butonuna
+  tıkla"). Açıklamaya tıklayıp kendi cümlenizi yazabilirsiniz; boş
+  bırakırsanız otomatik açıklamaya döner. Altında ilk locator görünür.
+
+**Araya adım ekleme:** Adımların arasındaki **＋ Buraya adım ekle**
+(en üstte **＋ Başa adım ekle**) ile:
+
+- **⏺ Kayıtla ekle** — ortam ve (gerekiyorsa) veri seti seçip Başlat'a
+  basın. Açılan pencerede o noktaya kadarki adımlar (önkoşullar dahil)
+  oynatılır, sonra kayıt çubuğu belirir. Tıklayın, yazın, ✓ Doğrula
+  kullanın ve **Kaydı Bitir**'e basın; adımlar seçtiğiniz yere eklenir.
+  Önceki adımlardan biri geçmezse kayda geçilmez ve nedeni gösterilir.
+- **⏱ Bekleme** / **🌐 Adrese git** — element gerektirmeyen adımlar.
+
+Eklenen adımlar çerçeveli görünür; **Geri al** ile çıkarabilir, **Kaydet**
+ile kalıcı hale getirirsiniz.
+
+**Bekleme süresi:** Koşumda her adım, hedef öğe ekranda görünene kadar
+bekler (varsayılan 5 sn; doğrulama adımlarında 2,4 katı). Süre dört
+seviyede ayarlanır, en özel olan geçerlidir: **adım** (adımın altındaki
+⏱ kutusu) → **senaryo** (başlıktaki "Bekleme") → **ortam** (Ortamlar
+sayfası) → **proje** (Proje sayfası). Adım altındaki listeden bekleme
+koşulu da seçilir: *görünür olsun* (varsayılan), *tıklanabilir olsun*
+(öğe aktif ve üstünde yükleniyor katmanı yok — sahte hata veren
+spinner'lı ekranlar için), *sayfada olsun* (gizli öğeler için). Adımın
+yanında son koşumlardaki ortalama/en uzun bulunma süresi görünür; süreye
+yaklaşan adımlar ⚠ ile işaretlenir.
+
+**Önkoşullar:** Senaryonun üstündeki **＋ Önkoşul ekle** ile:
+
+- *Açıklayıcı önkoşul* — "kullanıcının onay yetkisi olmalı" gibi bilgi
+  notu; koşulmaz.
+- *Önce koşulacak senaryolar* — örn. "Login" senaryosunu bir kez yazıp
+  diğer senaryolara önkoşul olarak ekleyin. Koşumda önce önkoşullar,
+  sonra senaryo aynı pencerede koşar. Önkoşul başarısız olursa senaryo
+  koşulmaz ve sonuç **blocked** olur ("login bozuk" ile "bu ekran bozuk"
+  ayrımı). En fazla 3 seviye iç içe olabilir; döngüye izin verilmez.
+  Önkoşul olarak kullanılan bir senaryo, kullanan senaryolardan
+  çıkarılmadan silinemez. Başka projeye kopyalarken önkoşulları da
+  birlikte kopyalanır.
 
 **Adım bayrakları:**
 
@@ -71,7 +116,7 @@ Senaryo detayında:
 | **boşsa** | Alan doluysa veya kilitliyse (disabled) dokunulmaz, adım atlanır; boşsa doldurulur | Dosyadan dosyaya dolu gelebilen alanlar |
 | **ops.** | Öğe bulunamazsa/adım başarısız olursa koşum kesilmez, adım atlanır | Bazen gelen modallar, koşullu alanlar |
 
-**Aksiyon türleri:** `click` (tıkla), `fill` (yaz), `select` (listeden seç),
+**Aksiyon türleri:** `goto` (adrese git), `click` (tıkla), `fill` (yaz), `select` (listeden seç),
 `upload` (dosya yükle), `press` (tuş bas — kayıtta Enter otomatik yakalanır),
 `wait` (değerdeki saniye kadar bekle — yavaş yüklenen ekranlar için elle
 eklenir), `assert-text` (metin görünmeli), `assert-visible` (öğe görünmeli).

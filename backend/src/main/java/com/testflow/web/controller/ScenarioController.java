@@ -5,6 +5,7 @@ import com.testflow.web.entity.Scenario;
 import com.testflow.web.entity.Step;
 import com.testflow.web.repository.ScenarioRepository;
 import com.testflow.web.security.AuthenticatedUser;
+import com.testflow.web.service.PreconditionService;
 import com.testflow.web.service.WorkspaceService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -21,15 +22,22 @@ public class ScenarioController {
 
     private final ScenarioRepository scenarios;
     private final WorkspaceService workspaceService;
+    private final PreconditionService preconditions;
 
-    public ScenarioController(ScenarioRepository scenarios, WorkspaceService workspaceService) {
+    public ScenarioController(ScenarioRepository scenarios, WorkspaceService workspaceService,
+                              PreconditionService preconditions) {
         this.scenarios = scenarios;
         this.workspaceService = workspaceService;
+        this.preconditions = preconditions;
     }
 
     public record CopyRequest(String targetProjectId) {}
 
-    /** Senaryoyu (adımlarıyla) üyesi olunan başka bir projeye bağımsız kopya olarak taşır. */
+    /**
+     * Senaryoyu (adımlarıyla) üyesi olunan başka bir projeye bağımsız kopya olarak taşır.
+     * Başka projeye kopyalarken önkoşul senaryoları da (zinciriyle) kopyalanır ve
+     * referanslar yeni kopyalara bağlanır; aynı projede çoğaltmada mevcut önkoşullar korunur.
+     */
     @PostMapping("/{id}/copy")
     @ResponseStatus(HttpStatus.CREATED)
     @Transactional
@@ -39,28 +47,62 @@ public class ScenarioController {
         AuthenticatedUser user = CurrentUser.from(req);
         Scenario src = find(id, user);
         workspaceService.assertMember(body.targetProjectId(), user.username());
+        boolean sameProject = body.targetProjectId().equals(src.getWorkspaceId());
+        return toDetail(copyScenario(src, body.targetProjectId(), sameProject, true, new java.util.HashMap<>()));
+    }
+
+    /** idMap: kaynak id → hedefteki kopya id (aynı önkoşul zincirde bir kez kopyalanır). */
+    private Scenario copyScenario(Scenario src, String targetProjectId, boolean sameProject, boolean isRoot,
+                                  java.util.Map<String, String> idMap) {
+        List<String> preIds = PreconditionService.parse(src.getPreconditionIds());
+        List<String> mappedPre = new java.util.ArrayList<>();
+        if (sameProject) {
+            mappedPre.addAll(preIds);
+        } else {
+            for (String preId : preIds) {
+                String mapped = idMap.get(preId);
+                if (mapped == null) {
+                    Scenario pre = scenarios.findByIdAndWorkspaceId(preId, src.getWorkspaceId()).orElse(null);
+                    if (pre == null) continue; // silinmiş referans — kopyaya taşınmaz
+                    mapped = copyScenario(pre, targetProjectId, false, false, idMap).getId();
+                }
+                mappedPre.add(mapped);
+            }
+        }
 
         Scenario dst = new Scenario();
         // Aynı projeye çoğaltmada isim çakışmasın
-        boolean sameProject = body.targetProjectId().equals(src.getWorkspaceId());
-        dst.setName(sameProject ? src.getName() + " (kopya)" : src.getName());
+        dst.setName(sameProject && isRoot ? src.getName() + " (kopya)" : src.getName());
         dst.setStartUrl(src.getStartUrl());
+        dst.setTimeoutMs(src.getTimeoutMs());
+        dst.setPreconditionText(src.getPreconditionText());
+        dst.setPreconditionIds(PreconditionService.join(mappedPre));
         dst.setTags(src.getTags());
-        dst.setWorkspaceId(body.targetProjectId());
+        dst.setWorkspaceId(targetProjectId);
         dst.setFolderId(sameProject ? src.getFolderId() : null); // klasörler projeye özgüdür
-        for (Step s : src.getSteps()) {
-            Step copy = new Step();
-            copy.setScenario(dst);
-            copy.setOrderIndex(s.getOrderIndex());
-            copy.setAction(s.getAction());
-            copy.setCandidates(s.getCandidates());
-            copy.setValue(s.getValue());
-            copy.setDataBinding(s.getDataBinding());
-            copy.setSensitive(s.isSensitive());
-            copy.setMeta(s.getMeta());
-            dst.getSteps().add(copy);
+        for (Step st : src.getSteps()) {
+            Step c = new Step();
+            c.setScenario(dst);
+            c.setOrderIndex(st.getOrderIndex());
+            c.setAction(st.getAction());
+            c.setCandidates(st.getCandidates());
+            c.setValue(st.getValue());
+            c.setDataBinding(st.getDataBinding());
+            c.setSensitive(st.isSensitive());
+            c.setMeta(st.getMeta());
+            dst.getSteps().add(c);
         }
-        return toDetail(scenarios.save(dst));
+        Scenario saved = scenarios.save(dst);
+        idMap.put(src.getId(), saved.getId());
+        return saved;
+    }
+
+    /** Verilen kök senaryoların önkoşul zinciri, koşum sırasıyla (her senaryo bir kez). */
+    @GetMapping("/precondition-chain")
+    public List<ScenarioDetail> preconditionChain(@RequestParam(defaultValue = "") String ids, HttpServletRequest req) {
+        AuthenticatedUser user = CurrentUser.from(req);
+        return preconditions.chain(user.workspaceId(), PreconditionService.parse(ids)).stream()
+                .map(this::toDetail).toList();
     }
 
     @GetMapping
@@ -69,7 +111,8 @@ public class ScenarioController {
         return scenarios.findByWorkspaceIdOrderByUpdatedAtDesc(user.workspaceId()).stream()
                 .map(s -> new ScenarioSummary(
                         s.getId(), s.getName(), s.getStartUrl(), s.getFolderId(),
-                        s.getTags(), s.getSteps().size(), s.getCreatedAt(), s.getUpdatedAt()))
+                        s.getTags(), s.getSteps().size(), s.getCreatedAt(), s.getUpdatedAt(),
+                        PreconditionService.parse(s.getPreconditionIds())))
                 .toList();
     }
 
@@ -92,6 +135,10 @@ public class ScenarioController {
         s.setTags(body.tags());
         s.setWorkspaceId(user.workspaceId());
         applySteps(s, body.steps());
+        if (body.preconditionIds() != null && !body.preconditionIds().isEmpty()) {
+            s.setPreconditionIds(PreconditionService.join(
+                    preconditions.validate(user.workspaceId(), null, body.preconditionIds())));
+        }
         return toDetail(scenarios.save(s));
     }
 
@@ -107,6 +154,14 @@ public class ScenarioController {
         if (body.folderId() != null) s.setFolderId(body.folderId());
         if (body.tags() != null) s.setTags(body.tags());
         if (body.steps() != null) applySteps(s, body.steps());
+        if (body.timeoutMs() != null) s.setTimeoutMs(Timeouts.normalize(body.timeoutMs()));
+        if (body.preconditionText() != null) {
+            s.setPreconditionText(body.preconditionText().isBlank() ? null : body.preconditionText().trim());
+        }
+        if (body.preconditionIds() != null) {
+            s.setPreconditionIds(PreconditionService.join(
+                    preconditions.validate(user.workspaceId(), s.getId(), body.preconditionIds())));
+        }
         return toDetail(scenarios.save(s));
     }
 
@@ -115,7 +170,14 @@ public class ScenarioController {
     @Transactional
     public void delete(@PathVariable String id, HttpServletRequest req) {
         AuthenticatedUser user = CurrentUser.from(req);
-        scenarios.delete(find(id, user));
+        Scenario s = find(id, user);
+        List<Scenario> dependents = preconditions.dependentsOf(user.workspaceId(), id);
+        if (!dependents.isEmpty()) {
+            String names = String.join(", ", dependents.stream().map(d -> "\"" + d.getName() + "\"").toList());
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Bu senaryo şu senaryolarda önkoşul olarak kullanılıyor: " + names + ". Önce oradan kaldırın.");
+        }
+        scenarios.delete(s);
     }
 
     private Scenario find(String id, AuthenticatedUser user) {
@@ -123,21 +185,37 @@ public class ScenarioController {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Senaryo bulunamadı."));
     }
 
+    /**
+     * Adım listesini id'ye göre senkronize eder: id'si eşleşen adım yerinde güncellenir
+     * (UUID korunur), id'siz adım yeni oluşturulur, listede olmayan adım silinir.
+     * Adım kimliğinin korunması koşum geçmişinin (RunStepResult.stepId) doğru adıma
+     * bağlı kalması için şarttır — önceden her kaydetmede tüm adımlar yeni id alıyordu.
+     */
     private void applySteps(Scenario s, List<StepDto> stepDtos) {
-        s.getSteps().clear();
-        if (stepDtos == null) return;
-        for (StepDto dto : stepDtos) {
-            Step step = new Step();
-            step.setScenario(s);
-            step.setOrderIndex(dto.orderIndex());
-            step.setAction(dto.action());
-            step.setCandidates(dto.candidates());
-            step.setValue(dto.value());
-            step.setDataBinding(dto.dataBinding());
-            step.setSensitive(dto.sensitive());
-            step.setMeta(dto.meta());
-            s.getSteps().add(step);
+        java.util.Map<String, Step> existing = new java.util.HashMap<>();
+        for (Step st : s.getSteps()) existing.put(st.getId(), st);
+
+        List<Step> next = new java.util.ArrayList<>();
+        if (stepDtos != null) {
+            for (StepDto dto : stepDtos) {
+                Step step = dto.id() != null ? existing.remove(dto.id()) : null;
+                if (step == null) {
+                    step = new Step();
+                    step.setScenario(s);
+                }
+                step.setOrderIndex(dto.orderIndex());
+                step.setAction(dto.action());
+                step.setCandidates(dto.candidates());
+                step.setValue(dto.value());
+                step.setDataBinding(dto.dataBinding());
+                step.setSensitive(dto.sensitive());
+                step.setMeta(dto.meta());
+                next.add(step);
+            }
         }
+        // existing'de kalanlar artık listede yok → orphanRemoval ile silinir
+        s.getSteps().clear();
+        s.getSteps().addAll(next);
     }
 
     private ScenarioDetail toDetail(Scenario s) {
@@ -146,6 +224,7 @@ public class ScenarioController {
                 s.getSteps().stream().map(st -> new StepDto(
                         st.getId(), st.getOrderIndex(), st.getAction(), st.getCandidates(),
                         st.getValue(), st.getDataBinding(), st.isSensitive(), st.getMeta())).toList(),
-                s.getCreatedAt(), s.getUpdatedAt());
+                s.getCreatedAt(), s.getUpdatedAt(), s.getTimeoutMs(),
+                s.getPreconditionText(), PreconditionService.parse(s.getPreconditionIds()));
     }
 }

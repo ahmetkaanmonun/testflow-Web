@@ -59,6 +59,14 @@ public class WorkspaceService {
         return ws;
     }
 
+    @Transactional
+    public Workspace updateSettings(String workspaceId, Integer defaultTimeoutMs, boolean timeoutProvided) {
+        Workspace ws = workspaces.findById(workspaceId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Proje bulunamadı."));
+        if (timeoutProvided) ws.setDefaultTimeoutMs(defaultTimeoutMs);
+        return workspaces.save(ws);
+    }
+
     public List<WorkspaceMember> membersOf(String workspaceId) {
         return members.findByWorkspaceIdOrderByCreatedAtAsc(workspaceId);
     }

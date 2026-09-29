@@ -7,11 +7,14 @@ export default function Project() {
   const [members, setMembers] = useState([]);
   const [newUsername, setNewUsername] = useState('');
   const [error, setError] = useState('');
+  const [timeoutSec, setTimeoutSec] = useState('');
+  const [timeoutSaved, setTimeoutSaved] = useState(false);
 
   const load = async () => {
     const projects = await api('/projects');
     const current = projects.find((p) => p.id === user.workspaceId);
     setProject(current);
+    setTimeoutSec(current?.defaultTimeoutMs ? String(current.defaultTimeoutMs / 1000) : '');
     if (current) setMembers(await api(`/projects/${current.id}/members`));
   };
 
@@ -37,6 +40,38 @@ export default function Project() {
       await load();
     } catch (e) { setError(e.message); }
   };
+
+  const saveTimeout = async () => {
+    setError('');
+    const n = parseFloat(String(timeoutSec).replace(',', '.'));
+    try {
+      await api(`/projects/${project.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ defaultTimeoutMs: n > 0 ? Math.round(n * 1000) : 0 }),
+      });
+      await load();
+      setTimeoutSaved(true);
+      setTimeout(() => setTimeoutSaved(false), 2000);
+    } catch (e) { setError(e.message); }
+  };
+
+  const settingsCard = (
+    <div className="card" style={{ marginTop: 16 }}>
+      <strong>Koşum ayarları</strong>
+      <div className="row" style={{ marginTop: 10, gap: 8 }}>
+        <span>Element bekleme süresi</span>
+        <input value={timeoutSec} onChange={(e) => setTimeoutSec(e.target.value)}
+               onKeyDown={(e) => e.key === 'Enter' && saveTimeout()}
+               placeholder="5" inputMode="decimal" style={{ width: 70 }} />
+        <span className="muted">sn</span>
+        <button onClick={saveTimeout}>{timeoutSaved ? 'Kaydedildi ✓' : 'Kaydet'}</button>
+      </div>
+      <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+        Adımlarda elementin ekranda görünmesi için beklenecek süre (0,5–60 sn). Boş bırakılırsa 5 sn.
+        Öncelik: adım → senaryo → ortam → proje. Doğrulama adımları bu sürenin 2,4 katı bekler.
+      </p>
+    </div>
+  );
 
   if (!project) return <div className="muted">Yükleniyor…</div>;
 
@@ -86,6 +121,7 @@ export default function Project() {
           </table>
         </>
       )}
+      {settingsCard}
       {error && <div className="error">{error}</div>}
     </div>
   );
