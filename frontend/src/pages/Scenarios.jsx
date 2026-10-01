@@ -58,10 +58,22 @@ export default function Scenarios() {
       if (event.data.type === 'TESTFLOW_RECORDING_DONE' && newScenario) {
         setRecording(false);
         const steps = (event.data.steps || []).map((s, i) => ({ ...s, orderIndex: i, dataBinding: null }));
+        // Adres boş bırakıldıysa kayıt önkoşulun bittiği sayfada başlamıştır:
+        // senaryonun başlangıç adresi ilk kaydedilen adımın sayfası olur
+        // (adım yoksa kayıt bitirildiğindeki sayfa).
+        let recordedStart = newScenario.startUrl;
+        if (!recordedStart) {
+          try { recordedStart = JSON.parse(steps[0]?.meta || '{}').url || ''; } catch { recordedStart = ''; }
+          recordedStart = recordedStart || event.data.pageUrl || '';
+        }
+        if (!recordedStart) {
+          setError('Kayıt alındı ama başlangıç adresi belirlenemedi — lütfen adresi girip tekrar deneyin.');
+          return;
+        }
         try {
           const created = await api('/scenarios', {
             method: 'POST',
-            body: JSON.stringify({ ...newScenario, steps }),
+            body: JSON.stringify({ ...newScenario, startUrl: recordedStart, steps }),
           });
           navigate(`/scenarios/${created.id}`);
         } catch (e) {
@@ -112,7 +124,7 @@ export default function Scenarios() {
   }, [navigate]);
 
   const startRecording = async () => {
-    if (!name || !startUrl) return;
+    if (!name || (!startUrl && newPreIds.length === 0)) return;
     setError('');
     recordMeta.current = { folderId: selectedFolder || null };
 
@@ -294,7 +306,10 @@ export default function Scenarios() {
             {environments.find((en) => startUrl.startsWith(en.baseUrl)) ? (
               <span className="muted" style={{ fontSize: 13, flex: 1 }}>{startUrl}</span>
             ) : (
-              <input placeholder="Başlangıç URL (https://...)" value={startUrl} onChange={(e) => setStartUrl(e.target.value)} />
+              <input placeholder={newPreIds.length > 0
+                       ? 'Başlangıç URL (opsiyonel — boşsa önkoşulun bittiği sayfa)'
+                       : 'Başlangıç URL (https://...)'}
+                     value={startUrl} onChange={(e) => setStartUrl(e.target.value)} />
             )}
           </div>
           {environments.length === 0 && (
@@ -332,9 +347,9 @@ export default function Scenarios() {
               </div>
               {newPreIds.length > 0 && (
                 <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-                  Kayıttan önce önkoşullar oynatılır, sonra yukarıdaki başlangıç adresine gidilip kayıt başlar —
-                  login adımlarını tekrar kaydetmezsiniz. Başlangıç adresi olarak login sayfasını değil,
-                  senaryonun başladığı sayfayı verin.
+                  Kayıttan önce önkoşullar oynatılır; login adımlarını tekrar kaydetmezsiniz.
+                  Başlangıç adresini boş bırakırsanız kayıt, önkoşulun bittiği sayfada başlar.
+                  Belirli bir sayfadan başlamak isterseniz o sayfanın adresini girin.
                 </div>
               )}
             </div>
@@ -348,10 +363,12 @@ export default function Scenarios() {
             </div>
           ) : (
             <div className="row">
-              <button onClick={startRecording} disabled={!name || !startUrl || !extension}>
+              <button onClick={startRecording}
+                      disabled={!name || (!startUrl && newPreIds.length === 0) || !extension}>
                 🔴 Kaydı Başlat
               </button>
-              <button className="ghost" onClick={createEmpty} disabled={!name || !startUrl}>
+              <button className="ghost" onClick={createEmpty} disabled={!name || !startUrl}
+                      title={!startUrl ? 'Boş senaryo için başlangıç adresi gerekli' : undefined}>
                 Boş Oluştur (adımları elle gir)
               </button>
               {extension === false && (
