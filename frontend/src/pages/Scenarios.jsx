@@ -1,7 +1,9 @@
 import { useEffect, useState, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
-import { prepareRun, saveRun, postStartRun, postStartRecordFrom, fetchActiveProject } from '../lib/run';
+import { prepareRun, postStartRecordFrom, fetchActiveProject } from '../lib/run';
+import { useBatchRun } from '../lib/useBatchRun';
+import BatchProgress from '../components/BatchProgress';
 
 export default function Scenarios() {
   const [scenarios, setScenarios] = useState([]);
@@ -22,10 +24,9 @@ export default function Scenarios() {
   const [batchEnv, setBatchEnv] = useState('');
   const [batchDataSet, setBatchDataSet] = useState('');
   const [showBatch, setShowBatch] = useState(false);
-  const [batch, setBatch] = useState(null); // { current, total, results: [{name, status}] }
+  const { batch, setBatch, runBatch } = useBatchRun();
   const navigate = useNavigate();
   const recordMeta = useRef({});
-  const runDoneResolver = useRef(null);
 
   const load = async () => {
     const [s, f, e, d] = await Promise.all([
@@ -46,11 +47,6 @@ export default function Scenarios() {
 
       if (event.data.type === 'TESTFLOW_PONG') {
         setExtension(event.data.version);
-      }
-
-      if (event.data.type === 'TESTFLOW_RUN_DONE' && runDoneResolver.current) {
-        runDoneResolver.current(event.data);
-        runDoneResolver.current = null;
       }
 
       // Önkoşullu yeni senaryo kaydı: önkoşullar oynatıldı, sonra kayıt alındı
@@ -170,36 +166,13 @@ export default function Scenarios() {
     });
   };
 
-  // Tek senaryoyu koş, RUN_DONE bekle, sonucu kaydet — durum döner
-  const runOne = async (scenarioId, project) => {
-    const scenario = await api(`/scenarios/${scenarioId}`);
-    if (!scenario.steps?.length) throw new Error('adım yok');
-    const environment = environments.find((en) => en.id === batchEnv) || null;
-    const dataSet = batchDataSet ? dataSets.find((d) => d.id === batchDataSet) : null;
-    const prepared = await prepareRun({ scenario, environment, dataSet, project });
-
-    const done = new Promise((resolve) => { runDoneResolver.current = resolve; });
-    postStartRun(prepared, { scenarioId, environmentId: batchEnv || null, testDataSetId: batchDataSet || null });
-    const data = await done;
-    return saveRun({ scenarioId, environmentId: batchEnv || null, testDataSetId: batchDataSet || null, data });
-  };
-
   const startBatch = async () => {
-    const ids = [...selected];
+    const items = [...selected].map((id) => ({ id, name: scenarios.find((x) => x.id === id)?.name ?? id }));
     setShowBatch(false);
-    setBatch({ current: 0, total: ids.length, results: [] });
-    const project = await fetchActiveProject();
-    for (let i = 0; i < ids.length; i++) {
-      const name = scenarios.find((s) => s.id === ids[i])?.name ?? ids[i];
-      setBatch((b) => ({ ...b, current: i + 1 }));
-      let status;
-      try {
-        status = await runOne(ids[i], project);
-      } catch (e) {
-        status = `atlandı (${e.message})`;
-      }
-      setBatch((b) => ({ ...b, results: [...b.results, { name, status }] }));
-    }
+    await runBatch(items, {
+      environment: environments.find((en) => en.id === batchEnv) || null,
+      dataSet: batchDataSet ? dataSets.find((d) => d.id === batchDataSet) : null,
+    });
     setSelected(new Set());
   };
 
@@ -264,30 +237,8 @@ export default function Scenarios() {
         </div>
       )}
 
-      {batch && (
-        <div className="card" style={{ marginBottom: 16, padding: 14 }}>
-          <div className="row" style={{ justifyContent: 'space-between', marginBottom: batch.results.length ? 10 : 0 }}>
-            <span>
-              {batch.results.length < batch.total
-                ? <>▶ Toplu koşum: <b>{batch.current}/{batch.total}</b></>
-                : <>Toplu koşum tamamlandı — {batch.results.filter((r) => r.status === 'passed').length} passed,{' '}
-                    {batch.results.filter((r) => r.status !== 'passed').length} diğer</>}
-            </span>
-            {batch.results.length >= batch.total && (
-              <div className="row">
-                <button className="ghost" onClick={() => navigate('/runs')}>Koşumlara Git</button>
-                <button className="ghost" onClick={() => setBatch(null)}>Kapat</button>
-              </div>
-            )}
-          </div>
-          {batch.results.map((r, i) => (
-            <div key={i} className="row" style={{ fontSize: 13, marginBottom: 4 }}>
-              <span className={`badge ${r.status === 'passed' ? 'passed' : 'failed'}`}>{r.status}</span>
-              <span>{r.name}</span>
-            </div>
-          ))}
-        </div>
-      )}
+      <BatchProgress batch={batch} onClose={() => setBatch(null)}
+                     actions={<button className="ghost" onClick={() => navigate('/runs')}>Koşumlara Git</button>} />
 
       {showNew && (
         <div className="card" style={{ marginBottom: 16 }}>
