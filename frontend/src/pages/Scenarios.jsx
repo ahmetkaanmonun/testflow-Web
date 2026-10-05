@@ -1,7 +1,9 @@
 import { useEffect, useState, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
-import { prepareRun, saveRun, postStartRun, postStartRecordFrom, fetchActiveProject } from '../lib/run';
+import { prepareRun, postStartRecordFrom, fetchActiveProject } from '../lib/run';
+import { useBatchRun } from '../lib/useBatchRun';
+import BatchProgress from '../components/BatchProgress';
 
 export default function Scenarios() {
   const [scenarios, setScenarios] = useState([]);
@@ -22,10 +24,9 @@ export default function Scenarios() {
   const [batchEnv, setBatchEnv] = useState('');
   const [batchDataSet, setBatchDataSet] = useState('');
   const [showBatch, setShowBatch] = useState(false);
-  const [batch, setBatch] = useState(null); // { current, total, results: [{name, status}] }
+  const { batch, setBatch, runBatch } = useBatchRun();
   const navigate = useNavigate();
   const recordMeta = useRef({});
-  const runDoneResolver = useRef(null);
 
   const load = async () => {
     const [s, f, e, d] = await Promise.all([
@@ -48,20 +49,27 @@ export default function Scenarios() {
         setExtension(event.data.version);
       }
 
-      if (event.data.type === 'TESTFLOW_RUN_DONE' && runDoneResolver.current) {
-        runDoneResolver.current(event.data);
-        runDoneResolver.current = null;
-      }
-
       // Önkoşullu yeni senaryo kaydı: önkoşullar oynatıldı, sonra kayıt alındı
       const newScenario = event.data.insertContext?.newScenario;
       if (event.data.type === 'TESTFLOW_RECORDING_DONE' && newScenario) {
         setRecording(false);
         const steps = (event.data.steps || []).map((s, i) => ({ ...s, orderIndex: i, dataBinding: null }));
+        // Adres boş bırakıldıysa kayıt önkoşulun bittiği sayfada başlamıştır:
+        // senaryonun başlangıç adresi ilk kaydedilen adımın sayfası olur
+        // (adım yoksa kayıt bitirildiğindeki sayfa).
+        let recordedStart = newScenario.startUrl;
+        if (!recordedStart) {
+          try { recordedStart = JSON.parse(steps[0]?.meta || '{}').url || ''; } catch { recordedStart = ''; }
+          recordedStart = recordedStart || event.data.pageUrl || '';
+        }
+        if (!recordedStart) {
+          setError('Kayıt alındı ama başlangıç adresi belirlenemedi — lütfen adresi girip tekrar deneyin.');
+          return;
+        }
         try {
           const created = await api('/scenarios', {
             method: 'POST',
-            body: JSON.stringify({ ...newScenario, steps }),
+            body: JSON.stringify({ ...newScenario, startUrl: recordedStart, steps }),
           });
           navigate(`/scenarios/${created.id}`);
         } catch (e) {
@@ -112,7 +120,7 @@ export default function Scenarios() {
   }, [navigate]);
 
   const startRecording = async () => {
-    if (!name || !startUrl) return;
+    if (!name || (!startUrl && newPreIds.length === 0)) return;
     setError('');
     recordMeta.current = { folderId: selectedFolder || null };
 
@@ -158,36 +166,13 @@ export default function Scenarios() {
     });
   };
 
-  // Tek senaryoyu koş, RUN_DONE bekle, sonucu kaydet — durum döner
-  const runOne = async (scenarioId, project) => {
-    const scenario = await api(`/scenarios/${scenarioId}`);
-    if (!scenario.steps?.length) throw new Error('adım yok');
-    const environment = environments.find((en) => en.id === batchEnv) || null;
-    const dataSet = batchDataSet ? dataSets.find((d) => d.id === batchDataSet) : null;
-    const prepared = await prepareRun({ scenario, environment, dataSet, project });
-
-    const done = new Promise((resolve) => { runDoneResolver.current = resolve; });
-    postStartRun(prepared, { scenarioId, environmentId: batchEnv || null, testDataSetId: batchDataSet || null });
-    const data = await done;
-    return saveRun({ scenarioId, environmentId: batchEnv || null, testDataSetId: batchDataSet || null, data });
-  };
-
   const startBatch = async () => {
-    const ids = [...selected];
+    const items = [...selected].map((id) => ({ id, name: scenarios.find((x) => x.id === id)?.name ?? id }));
     setShowBatch(false);
-    setBatch({ current: 0, total: ids.length, results: [] });
-    const project = await fetchActiveProject();
-    for (let i = 0; i < ids.length; i++) {
-      const name = scenarios.find((s) => s.id === ids[i])?.name ?? ids[i];
-      setBatch((b) => ({ ...b, current: i + 1 }));
-      let status;
-      try {
-        status = await runOne(ids[i], project);
-      } catch (e) {
-        status = `atlandı (${e.message})`;
-      }
-      setBatch((b) => ({ ...b, results: [...b.results, { name, status }] }));
-    }
+    await runBatch(items, {
+      environment: environments.find((en) => en.id === batchEnv) || null,
+      dataSet: batchDataSet ? dataSets.find((d) => d.id === batchDataSet) : null,
+    });
     setSelected(new Set());
   };
 
@@ -252,30 +237,8 @@ export default function Scenarios() {
         </div>
       )}
 
-      {batch && (
-        <div className="card" style={{ marginBottom: 16, padding: 14 }}>
-          <div className="row" style={{ justifyContent: 'space-between', marginBottom: batch.results.length ? 10 : 0 }}>
-            <span>
-              {batch.results.length < batch.total
-                ? <>▶ Toplu koşum: <b>{batch.current}/{batch.total}</b></>
-                : <>Toplu koşum tamamlandı — {batch.results.filter((r) => r.status === 'passed').length} passed,{' '}
-                    {batch.results.filter((r) => r.status !== 'passed').length} diğer</>}
-            </span>
-            {batch.results.length >= batch.total && (
-              <div className="row">
-                <button className="ghost" onClick={() => navigate('/runs')}>Koşumlara Git</button>
-                <button className="ghost" onClick={() => setBatch(null)}>Kapat</button>
-              </div>
-            )}
-          </div>
-          {batch.results.map((r, i) => (
-            <div key={i} className="row" style={{ fontSize: 13, marginBottom: 4 }}>
-              <span className={`badge ${r.status === 'passed' ? 'passed' : 'failed'}`}>{r.status}</span>
-              <span>{r.name}</span>
-            </div>
-          ))}
-        </div>
-      )}
+      <BatchProgress batch={batch} onClose={() => setBatch(null)}
+                     actions={<button className="ghost" onClick={() => navigate('/runs')}>Koşumlara Git</button>} />
 
       {showNew && (
         <div className="card" style={{ marginBottom: 16 }}>
@@ -294,7 +257,10 @@ export default function Scenarios() {
             {environments.find((en) => startUrl.startsWith(en.baseUrl)) ? (
               <span className="muted" style={{ fontSize: 13, flex: 1 }}>{startUrl}</span>
             ) : (
-              <input placeholder="Başlangıç URL (https://...)" value={startUrl} onChange={(e) => setStartUrl(e.target.value)} />
+              <input placeholder={newPreIds.length > 0
+                       ? 'Başlangıç URL (opsiyonel — boşsa önkoşulun bittiği sayfa)'
+                       : 'Başlangıç URL (https://...)'}
+                     value={startUrl} onChange={(e) => setStartUrl(e.target.value)} />
             )}
           </div>
           {environments.length === 0 && (
@@ -332,9 +298,9 @@ export default function Scenarios() {
               </div>
               {newPreIds.length > 0 && (
                 <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-                  Kayıttan önce önkoşullar oynatılır, sonra yukarıdaki başlangıç adresine gidilip kayıt başlar —
-                  login adımlarını tekrar kaydetmezsiniz. Başlangıç adresi olarak login sayfasını değil,
-                  senaryonun başladığı sayfayı verin.
+                  Kayıttan önce önkoşullar oynatılır; login adımlarını tekrar kaydetmezsiniz.
+                  Başlangıç adresini boş bırakırsanız kayıt, önkoşulun bittiği sayfada başlar.
+                  Belirli bir sayfadan başlamak isterseniz o sayfanın adresini girin.
                 </div>
               )}
             </div>
@@ -348,10 +314,12 @@ export default function Scenarios() {
             </div>
           ) : (
             <div className="row">
-              <button onClick={startRecording} disabled={!name || !startUrl || !extension}>
+              <button onClick={startRecording}
+                      disabled={!name || (!startUrl && newPreIds.length === 0) || !extension}>
                 🔴 Kaydı Başlat
               </button>
-              <button className="ghost" onClick={createEmpty} disabled={!name || !startUrl}>
+              <button className="ghost" onClick={createEmpty} disabled={!name || !startUrl}
+                      title={!startUrl ? 'Boş senaryo için başlangıç adresi gerekli' : undefined}>
                 Boş Oluştur (adımları elle gir)
               </button>
               {extension === false && (

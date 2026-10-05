@@ -6,6 +6,21 @@ import { prepareRun, saveRun, postStartRun, postStartRecordFrom, resolveTimeout,
 
 const ACTIONS = ['goto', 'click', 'fill', 'select', 'upload', 'press', 'assert-text', 'assert-visible', 'wait'];
 
+// Her aksiyonun değer ihtiyacı: null = değer kullanmaz (click, assert-visible).
+// binding: test verisine bağlanabilir; sensitive: "gizli" seçeneği anlamlı;
+// bindingOnly: değer yalnız veri setinden gelir (dosya yükleme).
+const VALUE_CONFIG = {
+  click: null,
+  'assert-visible': null,
+  fill: { placeholder: 'Yazılacak değer', binding: true, sensitive: true },
+  select: { placeholder: 'Seçilecek değer', binding: true },
+  'assert-text': { placeholder: 'Beklenen metin', binding: true },
+  upload: { binding: true, bindingOnly: true },
+  press: { placeholder: 'Tuş (örn. Enter)' },
+  wait: { placeholder: 'Süre (saniye)' },
+  goto: { placeholder: 'Adres (https://…)' },
+};
+
 export default function ScenarioDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -669,38 +684,70 @@ export default function ScenarioDetail() {
             </div>
             <div className="row">
               <span style={{ width: 24 }} />
-              <select value={step.action} onChange={(e) => updateStep(i, { action: e.target.value })} style={{ width: 150 }}>
+              <select value={step.action}
+                      onChange={(e) => {
+                        const next = e.target.value;
+                        const cfg = VALUE_CONFIG[next];
+                        // Değer kullanmayan aksiyona geçince bağlama/gizli temizlenir; yoksa
+                        // koşumda "anahtar veri setinde yok" gibi anlamsız hatalar çıkabilirdi
+                        updateStep(i, {
+                          action: next,
+                          ...(!cfg?.binding ? { dataBinding: null } : {}),
+                          ...(!cfg?.sensitive ? { sensitive: false } : {}),
+                          ...(!cfg ? { value: '' } : {}),
+                        });
+                      }}
+                      style={{ width: 150 }}>
                 {ACTIONS.map((a) => <option key={a} value={a}>{a}</option>)}
               </select>
 
-              <select
-                value={binding ? `bind:${binding.dataSetKey}` : 'static'}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  if (v === 'static') updateStep(i, { dataBinding: null });
-                  else updateStep(i, { dataBinding: JSON.stringify({ dataSetKey: v.slice(5) }) });
-                }}
-                style={{ width: 190 }}>
-                <option value="static">{step.action === 'upload' ? 'Dosya seçilmedi' : 'Sabit değer'}</option>
-                {keysFor(step.action).map((k) => <option key={k} value={`bind:${k}`}>📎 {k}</option>)}
-              </select>
+              {(() => {
+                const cfg = VALUE_CONFIG[step.action];
+                if (!cfg) {
+                  return <span className="muted" style={{ flex: 1, fontSize: 13 }}>Bu adım değer gerektirmez</span>;
+                }
+                return (
+                  <>
+                    {cfg.binding && (
+                      <select
+                        value={binding ? `bind:${binding.dataSetKey}` : 'static'}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          if (v === 'static') updateStep(i, { dataBinding: null });
+                          else updateStep(i, { dataBinding: JSON.stringify({ dataSetKey: v.slice(5) }) });
+                        }}
+                        style={{ width: 190 }}>
+                        <option value="static">{cfg.bindingOnly ? 'Dosya seçilmedi' : 'Sabit değer'}</option>
+                        {keysFor(step.action).map((k) => <option key={k} value={`bind:${k}`}>📎 {k}</option>)}
+                      </select>
+                    )}
 
-              {binding ? (
-                <span className="badge queued" style={{ flex: 1 }}>
-                  Test verisinden: {binding.dataSetKey}
-                </span>
-              ) : (
-                <input placeholder="Değer" value={step.value ?? ''}
-                       onChange={(e) => updateStep(i, { value: e.target.value })}
-                       type={step.sensitive ? 'password' : 'text'} style={{ flex: 1 }} />
-              )}
+                    {binding ? (
+                      <span className="badge queued" style={{ flex: 1 }}>
+                        Test verisinden: {binding.dataSetKey}
+                      </span>
+                    ) : cfg.bindingOnly ? (
+                      <span className="muted" style={{ flex: 1, fontSize: 13 }}>
+                        Yüklenecek dosyayı test verisinden seçin
+                      </span>
+                    ) : (
+                      <input placeholder={cfg.placeholder} value={step.value ?? ''}
+                             onChange={(e) => updateStep(i, { value: e.target.value })}
+                             inputMode={step.action === 'wait' ? 'decimal' : undefined}
+                             type={step.sensitive ? 'password' : 'text'} style={{ flex: 1 }} />
+                    )}
 
-              <label className="row muted" style={{ fontSize: 12, gap: 4 }}>
-                <input type="checkbox" checked={step.sensitive}
-                       onChange={(e) => updateStep(i, { sensitive: e.target.checked })}
-                       style={{ width: 'auto' }} />
-                gizli
-              </label>
+                    {cfg.sensitive && (
+                      <label className="row muted" style={{ fontSize: 12, gap: 4 }}>
+                        <input type="checkbox" checked={step.sensitive}
+                               onChange={(e) => updateStep(i, { sensitive: e.target.checked })}
+                               style={{ width: 'auto' }} />
+                        gizli
+                      </label>
+                    )}
+                  </>
+                );
+              })()}
 
               {['fill', 'select'].includes(step.action) && (
                 <label className="row muted" style={{ fontSize: 12, gap: 4 }}

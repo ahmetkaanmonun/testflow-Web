@@ -3,6 +3,8 @@ import { api } from '../lib/api';
 import { prepareRun, saveRun, postStartRun, fetchActiveProject } from '../lib/run';
 import { describeStep, technicalDetail } from '../lib/describe';
 import { formatDateTime, formatTimeMs, formatOffset, formatDuration, diffMs } from '../lib/format';
+import { useBatchRun } from '../lib/useBatchRun';
+import BatchProgress from '../components/BatchProgress';
 
 export default function Runs() {
   const [runs, setRuns] = useState([]);
@@ -11,6 +13,18 @@ export default function Runs() {
   const [detailSteps, setDetailSteps] = useState({}); // stepId -> adım tanımı
   const [preview, setPreview] = useState(null); // büyütülen ekran görüntüsü
   const [error, setError] = useState('');
+
+  // Yeni (toplu) koşum paneli
+  const { batch, setBatch, runBatch, running: batchRunning, extension } = useBatchRun();
+  const [showNewRun, setShowNewRun] = useState(false);
+  const [folders, setFolders] = useState([]);
+  const [environments, setEnvironments] = useState([]);
+  const [dataSets, setDataSets] = useState([]);
+  const [pick, setPick] = useState(new Set());
+  const [pickSearch, setPickSearch] = useState('');
+  const [pickFolder, setPickFolder] = useState('');
+  const [runEnv, setRunEnv] = useState('');
+  const [runDataSet, setRunDataSet] = useState('');
 
   const openDetail = async (run) => {
     setDetailSteps({});
@@ -47,6 +61,42 @@ export default function Runs() {
       .catch((e) => setError(e.message));
 
   useEffect(() => { load(); }, []);
+  useEffect(() => {
+    Promise.all([api('/folders'), api('/environments'), api('/test-data-sets')])
+      .then(([f, e, d]) => { setFolders(f); setEnvironments(e); setDataSets(d); })
+      .catch(() => {});
+  }, []);
+
+  // Toplu koşum bitince listeyi yenile
+  const batchDone = batch && batch.results.length >= batch.total;
+  useEffect(() => { if (batchDone) load(); }, [batchDone]);
+
+  // Her senaryonun en son koşum durumu (liste en yeni koşum önce gelir)
+  const lastStatus = {};
+  for (const r of [...runs].sort((a, b) => new Date(b.startedAt) - new Date(a.startedAt))) {
+    if (!(r.scenarioId in lastStatus)) lastStatus[r.scenarioId] = r.status;
+  }
+  const folderName = (id) => folders.find((f) => f.id === id)?.name;
+  const pickVisible = scenarios.filter((sc) =>
+    (!pickFolder || sc.folderId === pickFolder) &&
+    (!pickSearch || sc.name.toLocaleLowerCase('tr-TR').includes(pickSearch.toLocaleLowerCase('tr-TR'))));
+  const togglePick = (id) => setPick((prev) => {
+    const next = new Set(prev);
+    next.has(id) ? next.delete(id) : next.add(id);
+    return next;
+  });
+
+  const startNewRun = async () => {
+    setError('');
+    // Seçim sırası yerine listedeki sırayla koş (öngörülebilir olsun)
+    const items = scenarios.filter((sc) => pick.has(sc.id)).map((sc) => ({ id: sc.id, name: sc.name }));
+    setShowNewRun(false);
+    await runBatch(items, {
+      environment: environments.find((en) => en.id === runEnv) || null,
+      dataSet: runDataSet ? dataSets.find((d) => d.id === runDataSet) : null,
+    });
+    setPick(new Set());
+  };
 
   const scenarioName = (id) => scenarios.find((s) => s.id === id)?.name ?? id;
 
@@ -118,7 +168,77 @@ export default function Runs() {
 
   return (
     <div>
-      <h1 className="page-title">Koşum Geçmişi</h1>
+      <div className="row" style={{ justifyContent: 'space-between', marginBottom: 16 }}>
+        <h1 className="page-title" style={{ margin: 0 }}>Koşum Geçmişi</h1>
+        <button onClick={() => setShowNewRun(!showNewRun)} disabled={batchRunning || !!rerunning}>
+          ▶ Yeni Koşum
+        </button>
+      </div>
+
+      {showNewRun && !batchRunning && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <div className="row" style={{ marginBottom: 12, gap: 8, flexWrap: 'wrap' }}>
+            <input placeholder="Senaryo ara…" value={pickSearch} onChange={(e) => setPickSearch(e.target.value)}
+                   style={{ width: 220 }} />
+            <select value={pickFolder} onChange={(e) => setPickFolder(e.target.value)} style={{ width: 200 }}>
+              <option value="">Tüm klasörler</option>
+              {folders.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
+            </select>
+            <button className="ghost"
+                    onClick={() => setPick(new Set(pickVisible.map((sc) => sc.id)))}>
+              Görünenlerin tümünü seç
+            </button>
+            <button className="ghost"
+                    onClick={() => setPick(new Set(scenarios
+                      .filter((sc) => ['failed', 'blocked'].includes(lastStatus[sc.id])).map((sc) => sc.id)))}
+                    title="Son koşumu failed veya blocked olan senaryolar">
+              Son koşumu başarısız olanları seç
+            </button>
+            {pick.size > 0 && <button className="ghost" onClick={() => setPick(new Set())}>Seçimi temizle</button>}
+          </div>
+
+          <div style={{ maxHeight: 320, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8 }}>
+            {pickVisible.length === 0 && (
+              <div className="muted" style={{ padding: 14, fontSize: 13 }}>Eşleşen senaryo yok.</div>
+            )}
+            {pickVisible.map((sc) => (
+              <label key={sc.id} className="row"
+                     style={{ padding: '8px 12px', gap: 10, borderBottom: '1px solid var(--border)', cursor: 'pointer' }}>
+                <input type="checkbox" checked={pick.has(sc.id)} onChange={() => togglePick(sc.id)} />
+                <span style={{ flex: 1 }}>{sc.name}</span>
+                {folderName(sc.folderId) && <span className="muted" style={{ fontSize: 12 }}>{folderName(sc.folderId)}</span>}
+                <span className="muted" style={{ fontSize: 12, width: 60, textAlign: 'right' }}>{sc.stepCount} adım</span>
+                {lastStatus[sc.id]
+                  ? <span className={`badge ${lastStatus[sc.id]}`} title="Son koşum">{lastStatus[sc.id]}</span>
+                  : <span className="muted" style={{ fontSize: 12 }}>hiç koşulmadı</span>}
+              </label>
+            ))}
+          </div>
+
+          <div className="row" style={{ marginTop: 12, gap: 8, flexWrap: 'wrap' }}>
+            <select value={runEnv} onChange={(e) => setRunEnv(e.target.value)} style={{ width: 220 }}>
+              <option value="">Ortam: kayıttaki URL</option>
+              {environments.map((en) => <option key={en.id} value={en.id}>{en.name}</option>)}
+            </select>
+            <select value={runDataSet} onChange={(e) => setRunDataSet(e.target.value)} style={{ width: 220 }}>
+              <option value="">Test verisi: yok</option>
+              {dataSets.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+            <button onClick={startNewRun} disabled={pick.size === 0 || !extension}>
+              {pick.size > 0 ? `${pick.size} senaryoyu koş` : 'Senaryo seçin'}
+            </button>
+            <button className="ghost" onClick={() => setShowNewRun(false)}>Vazgeç</button>
+            {extension === false && (
+              <span className="muted" style={{ fontSize: 12 }}>Koşum için TestFlow eklentisi gerekli.</span>
+            )}
+          </div>
+          <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+            Senaryolar listedeki sırayla, art arda koşulur. Önkoşulu olan senaryolarda önce önkoşullar çalışır.
+          </div>
+        </div>
+      )}
+
+      <BatchProgress batch={batch} onClose={() => setBatch(null)} />
       <table>
         <thead>
           <tr><th>Senaryo</th><th>Durum</th><th>Başlatan</th><th>Başlangıç</th><th>Süre</th><th></th></tr>
@@ -137,7 +257,7 @@ export default function Runs() {
                 <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                   {r.status !== 'passed' && (
                     <button className="ghost" onClick={(e) => rerun(e, r)}
-                            disabled={rerunning !== null} style={{ marginRight: 6 }}>
+                            disabled={rerunning !== null || batchRunning} style={{ marginRight: 6 }}>
                       {rerunning === r.id ? '▶ Koşuyor…' : '↻ Tekrar Koş'}
                     </button>
                   )}

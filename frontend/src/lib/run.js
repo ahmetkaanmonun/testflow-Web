@@ -91,7 +91,8 @@ export async function prepareRun({ scenario, environment = null, dataSet = null,
     }
     for (const st of pre.steps || []) combined.push(withMeta(st, tag));
   });
-  if (chain.length > 0) {
+  // Adres boşsa (araya kayıt / önkoşullu yeni kayıt) önkoşulun bittiği sayfada kalınır
+  if (chain.length > 0 && scenario.startUrl) {
     combined.push(withMeta({ action: 'goto', candidates: '[]', value: applyEnvironment(scenario.startUrl, environment),
       dataBinding: null, sensitive: false, meta: '{}' },
       { synthetic: true, description: 'Önkoşullar tamam — senaryonun başlangıç adresine git' }));

@@ -148,6 +148,7 @@ async function handle(msg, sender) {
       scenarioName: s.scenarioName,
       startUrl: s.startUrl,
       steps: s.steps,
+      pageUrl: (sender.tab && sender.tab.url) || null, // kayıt bitirildiğindeki sayfa
       insertContext: s.insertContext || null, // doluysa: mevcut senaryoya araya ekleme
     });
     closeTarget(s, sender.tab && sender.tab.id);

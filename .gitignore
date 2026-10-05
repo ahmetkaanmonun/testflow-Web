@@ -1,5 +1,10 @@
 # Java / Maven
 backend/target/
+
+# Yerel H2 veritabanı dosyaları (test verileri, şifreler dahil — repoya girmemeli)
+backend/data/
+*.mv.db
+*.trace.db
 *.class
 
 # Node
