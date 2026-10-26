@@ -6,7 +6,7 @@ export const DEFAULT_TIMEOUT_MS = 5000;
 
 /** Ortam seçiliyse URL'in yalnızca origin'i değişir, path korunur. */
 export function applyEnvironment(url, environment) {
-  if (!environment) return url;
+  if (!url || !environment) return url;
   try {
     const u = new URL(url);
     return new URL(environment.baseUrl).origin + u.pathname + u.search + u.hash;
@@ -85,7 +85,7 @@ export async function prepareRun({ scenario, environment = null, dataSet = null,
   const combined = [];
   chain.forEach((pre, k) => {
     const tag = { precondition: { scenarioId: pre.id, scenarioName: pre.name } };
-    if (k > 0) {
+    if (k > 0 && pre.startUrl) { // adresi boş önkoşul: bir öncekinin bittiği sayfadan devam
       combined.push(withMeta({ action: 'goto', candidates: '[]', value: applyEnvironment(pre.startUrl, environment),
         dataBinding: null, sensitive: false, meta: '{}' }, { ...tag, synthetic: true }));
     }

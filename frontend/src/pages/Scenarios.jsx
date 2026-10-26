@@ -54,22 +54,13 @@ export default function Scenarios() {
       if (event.data.type === 'TESTFLOW_RECORDING_DONE' && newScenario) {
         setRecording(false);
         const steps = (event.data.steps || []).map((s, i) => ({ ...s, orderIndex: i, dataBinding: null }));
-        // Adres boş bırakıldıysa kayıt önkoşulun bittiği sayfada başlamıştır:
-        // senaryonun başlangıç adresi ilk kaydedilen adımın sayfası olur
-        // (adım yoksa kayıt bitirildiğindeki sayfa).
-        let recordedStart = newScenario.startUrl;
-        if (!recordedStart) {
-          try { recordedStart = JSON.parse(steps[0]?.meta || '{}').url || ''; } catch { recordedStart = ''; }
-          recordedStart = recordedStart || event.data.pageUrl || '';
-        }
-        if (!recordedStart) {
-          setError('Kayıt alındı ama başlangıç adresi belirlenemedi — lütfen adresi girip tekrar deneyin.');
-          return;
-        }
+        // Adres boş bırakıldıysa boş kalır: koşumda önkoşulun bittiği sayfadan devam edilir.
+        // (Kayıttaki adresi yakalayıp saklamak, login sonrası oturuma özel kod içeren
+        // adreslerde sonraki koşumlarda hataya yol açardı.)
         try {
           const created = await api('/scenarios', {
             method: 'POST',
-            body: JSON.stringify({ ...newScenario, startUrl: recordedStart, steps }),
+            body: JSON.stringify({ ...newScenario, startUrl: newScenario.startUrl || null, steps }),
           });
           navigate(`/scenarios/${created.id}`);
         } catch (e) {
@@ -151,7 +142,7 @@ export default function Scenarios() {
     try {
       const created = await api('/scenarios', {
         method: 'POST',
-        body: JSON.stringify({ name, startUrl, folderId: selectedFolder || null, steps: [], preconditionIds: newPreIds }),
+        body: JSON.stringify({ name, startUrl: startUrl || null, folderId: selectedFolder || null, steps: [], preconditionIds: newPreIds }),
       });
       setName(''); setStartUrl(''); setShowNew(false); setNewPreIds([]);
       navigate(`/scenarios/${created.id}`);
@@ -299,8 +290,8 @@ export default function Scenarios() {
               {newPreIds.length > 0 && (
                 <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
                   Kayıttan önce önkoşullar oynatılır; login adımlarını tekrar kaydetmezsiniz.
-                  Başlangıç adresini boş bırakırsanız kayıt, önkoşulun bittiği sayfada başlar.
-                  Belirli bir sayfadan başlamak isterseniz o sayfanın adresini girin.
+                  Başlangıç adresini boş bırakırsanız hem kayıt hem sonraki koşumlar önkoşulun bittiği
+                  sayfadan devam eder. Belirli bir sayfadan başlamak isterseniz o sayfanın adresini girin.
                 </div>
               )}
             </div>
@@ -318,8 +309,8 @@ export default function Scenarios() {
                       disabled={!name || (!startUrl && newPreIds.length === 0) || !extension}>
                 🔴 Kaydı Başlat
               </button>
-              <button className="ghost" onClick={createEmpty} disabled={!name || !startUrl}
-                      title={!startUrl ? 'Boş senaryo için başlangıç adresi gerekli' : undefined}>
+              <button className="ghost" onClick={createEmpty} disabled={!name || (!startUrl && newPreIds.length === 0)}
+                      title={!startUrl && newPreIds.length === 0 ? 'Başlangıç adresi girin ya da bir önkoşul seçin' : undefined}>
                 Boş Oluştur (adımları elle gir)
               </button>
               {extension === false && (
@@ -352,7 +343,7 @@ export default function Scenarios() {
                 <input type="checkbox" checked={selected.has(s.id)} onChange={() => toggleSelect(s.id)} />
               </td>
               <td><Link to={`/scenarios/${s.id}`} style={{ color: 'var(--accent)' }}>{s.name}</Link></td>
-              <td className="muted">{s.startUrl}</td>
+              <td className="muted">{s.startUrl || <i>önkoşuldan devam eder</i>}</td>
               <td>{s.stepCount}</td>
               <td className="muted">{new Date(s.updatedAt).toLocaleString('tr-TR')}</td>
             </tr>

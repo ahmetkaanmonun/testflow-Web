@@ -29,7 +29,8 @@ public class ScenarioDtos {
 
     public record CreateScenarioRequest(
             @NotBlank String name,
-            @NotBlank String startUrl,
+            /* önkoşulu olan senaryoda boş olabilir: önkoşulun bittiği sayfadan devam edilir */
+            String startUrl,
             String folderId,
             String tags,
             List<StepDto> steps,

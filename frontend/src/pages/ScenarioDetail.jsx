@@ -83,7 +83,7 @@ export default function ScenarioDetail() {
       .then(([s, ds, envs, f]) => {
         setScenario(s);
         setName(s.name);
-        setStartUrl(s.startUrl);
+        setStartUrl(s.startUrl || '');
         setFolderId(s.folderId || '');
         setTimeoutSec(s.timeoutMs ? String(s.timeoutMs / 1000) : '');
         setPreIds(s.preconditionIds || []);
@@ -234,7 +234,7 @@ export default function ScenarioDetail() {
     const dataSet = recDataSet ? dataSets.find((d) => d.id === recDataSet) : null;
     try {
       const prepared = await prepareRun({
-        scenario: { ...scenario, startUrl: startUrl || scenario.startUrl, steps: prefix,
+        scenario: { ...scenario, startUrl: startUrl.trim(), steps: prefix,
                     timeoutMs: scenarioTimeoutMs(), preconditionIds: preIds },
         environment, dataSet, project: projects.find((p) => p.active) || null,
       });
@@ -279,13 +279,17 @@ export default function ScenarioDetail() {
 
   const save = async () => {
     setError('');
+    if (!startUrl.trim() && preIds.length === 0) {
+      setError('Önkoşulu olmayan senaryolarda başlangıç adresi gerekli.');
+      return;
+    }
     try {
       const normalized = steps.map(({ _batch, ...s }, i) => ({ ...s, orderIndex: i }));
       const updated = await api(`/scenarios/${id}`, {
         method: 'PATCH',
         body: JSON.stringify({
           name: name || scenario.name,
-          startUrl: startUrl || scenario.startUrl,
+          startUrl: startUrl.trim(), // "" → temizle (yalnız önkoşulu olan senaryoda geçerli)
           folderId: folderId || null,
           steps: normalized,
           timeoutMs: scenarioTimeoutMs() ?? 0, // 0 → temizle
@@ -295,7 +299,7 @@ export default function ScenarioDetail() {
       });
       setScenario(updated);
       setName(updated.name);
-      setStartUrl(updated.startUrl);
+      setStartUrl(updated.startUrl || '');
       setSteps(updated.steps || []);
       setTimeoutSec(updated.timeoutMs ? String(updated.timeoutMs / 1000) : '');
       if (insertState?.kind === 'added') setInsertState(null);
@@ -317,6 +321,10 @@ export default function ScenarioDetail() {
 
   // ---------- Koşum (data-driven: seçilen her veri setiyle sırayla) ----------
   const startRun = async () => {
+    if (!startUrl.trim() && preIds.length === 0) {
+      setError('Başlangıç adresi girin ya da bir önkoşul ekleyin.');
+      return;
+    }
     setError('');
     const hasBindingNow = steps.some((s) => s.dataBinding);
     const setList = runDataSets.size > 0 ? [...runDataSets] : [null];
@@ -344,7 +352,7 @@ export default function ScenarioDetail() {
       try {
         const dataSet = dataSetId ? dataSets.find((d) => d.id === dataSetId) : null;
         const prepared = await prepareRun({
-          scenario: { ...scenario, startUrl: startUrl || scenario.startUrl, steps: currentSteps,
+          scenario: { ...scenario, startUrl: startUrl.trim(), steps: currentSteps,
                       timeoutMs: scenarioTimeoutMs(), preconditionIds: preIds },
           environment, dataSet, project,
         });
@@ -576,7 +584,11 @@ export default function ScenarioDetail() {
           <span className="muted" style={{ fontSize: 13 }}>{startUrl}</span>
         ) : (
           <input value={startUrl} onChange={(e) => setStartUrl(e.target.value)}
-                 placeholder="Başlangıç URL" style={{ maxWidth: 420, fontSize: 13 }} />
+                 placeholder={preIds.length > 0 ? 'Boş: önkoşulun bittiği sayfadan devam eder' : 'Başlangıç URL'}
+                 title={preIds.length > 0
+                   ? 'Önkoşuldan sonra bu adrese gidilir. Boş bırakırsanız önkoşulun bittiği sayfadan devam edilir.'
+                   : undefined}
+                 style={{ maxWidth: 420, fontSize: 13 }} />
         )}
         <select value={folderId} onChange={(e) => setFolderId(e.target.value)} style={{ width: 180 }}>
           <option value="">Klasörsüz</option>
