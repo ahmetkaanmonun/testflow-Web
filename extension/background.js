@@ -195,7 +195,8 @@ async function handle(msg, sender) {
   if (msg.type === 'GET_PLAY_STATE') {
     const s = await getSession();
     if (!s || s.mode !== 'play' || !sender.tab || sender.tab.id !== s.tabId) return { playing: false };
-    return { playing: true, steps: s.steps, index: s.index, runConfig: s.runConfig || {} };
+    return { playing: true, steps: s.steps, index: s.index, runConfig: s.runConfig || {},
+             pendingScript: s.pendingScript ?? null };
   }
 
   // player.js: javascript: href'li linklerin kodunu sayfanın kendi
@@ -248,8 +249,74 @@ async function handle(msg, sender) {
     if (!s || s.mode !== 'play' || !sender.tab || sender.tab.id !== s.tabId) return { ok: false };
     s.results.push(msg.result);
     s.index = msg.result.orderIndex + 1;
+    s.pendingScript = null;
     await setSession(s);
     return { ok: true };
+  }
+
+  // Script adımı başlamadan önce işaretlenir: script sayfa geçişi başlatırsa player
+  // ölür ve sonuç raporlanamaz; yeni sayfadaki player bu işareti görüp adımı
+  // tamamlanmış sayar (aksi halde aynı script yeni sayfada tekrar çalışırdı).
+  if (msg.type === 'SCRIPT_STARTED') {
+    const s = await getSession();
+    if (!s || s.mode !== 'play' || !sender.tab || sender.tab.id !== s.tabId) return { ok: false };
+    s.pendingScript = msg.index;
+    await setSession(s);
+    return { ok: true };
+  }
+
+  // Kullanıcının script adımı: sayfanın kendi ortamında (MAIN world), konsoldaki
+  // gibi çalışır. async desteklenir; testData ile veri setine erişilir.
+  // Sonuç: { ok, value?, error? } — hata fırlatma veya false dönüşü başarısızlıktır.
+  if (msg.type === 'EXEC_SCRIPT') {
+    const s = await getSession();
+    if (!s || s.mode !== 'play' || !sender.tab || sender.tab.id !== s.tabId) return { ok: false, error: 'Koşum oturumu yok' };
+    try {
+      const [inj] = await chrome.scripting.executeScript({
+        target: { tabId: sender.tab.id },
+        world: 'MAIN',
+        func: async (code, testData, timeoutMs) => {
+          const short = (v) => String(v && v.message ? v.message : v).slice(0, 300);
+          const timeoutMsg = `Script ${Math.round(timeoutMs / 1000)} sn içinde bitmedi`;
+          let fn;
+          try {
+            fn = (0, eval)('(async function (testData) {\n' + code + '\n})');
+          } catch (e) {
+            if (e instanceof SyntaxError) return { ok: false, error: 'Script yazım hatası: ' + short(e) };
+            // Sitenin güvenlik politikası (CSP) eval'i engelledi → script etiketiyle dene
+            return await new Promise((resolve) => {
+              const evName = '__tf_script_' + Math.random().toString(36).slice(2);
+              const onDone = (ev) => { clearTimeout(timer); document.removeEventListener(evName, onDone); resolve(ev.detail); };
+              const timer = setTimeout(() => {
+                document.removeEventListener(evName, onDone);
+                resolve({ ok: false, error: timeoutMsg + ' ya da sitenin güvenlik politikası (CSP) script çalıştırmaya izin vermiyor.' });
+              }, timeoutMs);
+              document.addEventListener(evName, onDone);
+              const el = document.createElement('script');
+              el.textContent = '(async () => { const done = (x) => document.dispatchEvent(new CustomEvent(' +
+                JSON.stringify(evName) + ', { detail: x })); try { const v = await (async function (testData) {\n' +
+                code + '\n})(' + JSON.stringify(testData) + '); done({ ok: v !== false, value: v === undefined ? null : String(v).slice(0, 300) }); }' +
+                ' catch (e) { done({ ok: false, error: String(e && e.message ? e.message : e).slice(0, 300) }); } })();';
+              document.documentElement.appendChild(el);
+              el.remove();
+            });
+          }
+          try {
+            const v = await Promise.race([
+              fn(testData),
+              new Promise((_, rej) => setTimeout(() => rej(new Error(timeoutMsg)), timeoutMs)),
+            ]);
+            return { ok: v !== false, value: v === undefined ? null : String(v).slice(0, 300) };
+          } catch (e) {
+            return { ok: false, error: short(e) };
+          }
+        },
+        args: [msg.code, msg.testData || {}, msg.timeoutMs || 30000],
+      });
+      return (inj && inj.result) || { ok: false, error: 'Script sonucu alınamadı' };
+    } catch (e) {
+      return { ok: false, error: 'Script çalıştırılamadı: ' + String(e).slice(0, 200) };
+    }
   }
 
   if (msg.type === 'PLAY_DONE') {

@@ -4,7 +4,7 @@ import { api, getUser } from '../lib/api';
 import { describeStep, autoDescribe } from '../lib/describe';
 import { prepareRun, saveRun, postStartRun, postStartRecordFrom, resolveTimeout, isPreconditionResult } from '../lib/run';
 
-const ACTIONS = ['goto', 'click', 'fill', 'select', 'upload', 'press', 'assert-text', 'assert-visible', 'wait'];
+const ACTIONS = ['goto', 'click', 'fill', 'select', 'upload', 'press', 'assert-text', 'assert-visible', 'wait', 'fill-form', 'script', 'repeat-start', 'repeat-end'];
 
 // Her aksiyonun değer ihtiyacı: null = değer kullanmaz (click, assert-visible).
 // binding: test verisine bağlanabilir; sensitive: "gizli" seçeneği anlamlı;
@@ -19,7 +19,14 @@ const VALUE_CONFIG = {
   press: { placeholder: 'Tuş (örn. Enter)' },
   wait: { placeholder: 'Süre (saniye)' },
   goto: { placeholder: 'Adres (https://…)' },
+  // Kendi ayar paneli olan adımlar (kartın altında)
+  'fill-form': { panel: true },
+  script: { panel: true },
+  'repeat-start': { panel: true },
+  'repeat-end': null,
 };
+
+const DEFAULT_FORM = { choice: { mode: 'label', value: '' }, text: { mode: 'random' }, onlyEmpty: true };
 
 export default function ScenarioDetail() {
   const { id } = useParams();
@@ -37,6 +44,16 @@ export default function ScenarioDetail() {
   const [steps, setSteps] = useState([]);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
+  const dirtyRef = useRef(false); // sayfa kapatılırken uyarı için
+  useEffect(() => {
+    const onBeforeUnload = (e) => {
+      if (!dirtyRef.current) return;
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, []);
   const [showRun, setShowRun] = useState(false);
   const [runEnv, setRunEnv] = useState('');
   const [runDataSets, setRunDataSets] = useState(new Set()); // çoklu veri seti (data-driven)
@@ -48,6 +65,8 @@ export default function ScenarioDetail() {
   const [waitStats, setWaitStats] = useState({}); // stepId -> { avgWaitMs, maxWaitMs, samples }
   // Araya ekleme
   const [insertMenu, setInsertMenu] = useState(null);   // menüsü açık ekleme noktası (afterIndex)
+  const [repeatPanel, setRepeatPanel] = useState(null);  // tekrar bloğu ekleme paneli açık nokta
+  const [repeatCount, setRepeatCount] = useState('2');
   const [recordPanel, setRecordPanel] = useState(null); // kayıtla ekleme paneli açık nokta
   const [recEnv, setRecEnv] = useState('');
   const [recDataSet, setRecDataSet] = useState('');
@@ -152,6 +171,7 @@ export default function ScenarioDetail() {
       method: 'PATCH',
       body: JSON.stringify({ steps: patchedSteps }),
     });
+    setScenario(updated); // kayıtlı hal güncellendi (kaydedilmemiş değişiklik takibi için)
     setSteps(updated.steps || []);
     return updated.steps || patchedSteps;
   };
@@ -179,6 +199,22 @@ export default function ScenarioDetail() {
     setInsertState({ kind: 'added', batch, count: newSteps.length, at: afterIndex + 2 });
   };
 
+  // afterIndex'ten sonraki `count` adımı tekrar bloğuyla sarar
+  const wrapInRepeat = (afterIndex, count) => {
+    insertBatch.current += 1;
+    const batch = insertBatch.current;
+    setSteps((prev) => {
+      const next = [...prev];
+      const n = Math.max(1, Math.min(count, next.length - (afterIndex + 1)));
+      next.splice(afterIndex + 1 + n, 0, { ...blankStep('repeat-end'), _batch: batch });
+      next.splice(afterIndex + 1, 0, { ...blankStep('repeat-start'), meta: JSON.stringify({ repeat: {} }), _batch: batch });
+      return next.map((st, idx) => ({ ...st, orderIndex: idx }));
+    });
+    setInsertMenu(null);
+    setRepeatPanel(null);
+    setInsertState({ kind: 'added', batch, count: 2, at: afterIndex + 2 });
+  };
+
   const undoInsert = (batch) => {
     setSteps((prev) => prev.filter((st) => st._batch !== batch).map((st, idx) => ({ ...st, orderIndex: idx })));
     setInsertState(null);
@@ -191,7 +227,9 @@ export default function ScenarioDetail() {
   // Kayıtla ekle: 1..afterIndex+1 adımlarını oynat, sonra aynı pencerede kayda geç
   const startRecordFrom = async (afterIndex) => {
     setError('');
-    const prefix = steps.slice(0, afterIndex + 1);
+    // Tekrar blokları kayıt öncesi oynatmada tek tur (ilk satır) olarak çalışır: hem hızlıdır
+    // hem de ekleme noktası bir bloğun içindeyse bloğun sonu oynatılan kısmın dışında kalmaz.
+    const prefix = steps.slice(0, afterIndex + 1).filter((st) => !['repeat-start', 'repeat-end'].includes(st.action));
     const environment = environments.find((en) => en.id === recEnv) || null;
     const dataSet = recDataSet ? dataSets.find((d) => d.id === recDataSet) : null;
     try {
@@ -328,6 +366,25 @@ export default function ScenarioDetail() {
     navigate('/runs');
   };
 
+  // ---------- Kaydedilmemiş değişiklik takibi ----------
+  // Ekrandaki taslak ile sunucudaki kayıtlı hal karşılaştırılır. Senaryo sayfasındaki
+  // ▶ Koş taslağı kullanır; ama toplu koşum ve "Tekrar Koş" KAYITLI hali kullandığı
+  // için kaydedilmemiş bir değişiklik (örn. "ops." işareti) oralarda geçerli olmaz.
+  const stepsKey = (list) => JSON.stringify((list || []).map((st) => [
+    st.id ?? null, st.action, st.candidates, st.value ?? '', st.dataBinding ?? null, !!st.sensitive, st.meta ?? '{}',
+  ]));
+  const dirty = !!scenario && (
+    (name || '') !== (scenario.name || '') ||
+    (startUrl || '') !== (scenario.startUrl || '') ||
+    (folderId || '') !== (scenario.folderId || '') ||
+    (scenarioTimeoutMs() ?? null) !== (scenario.timeoutMs ?? null) ||
+    (preText || '') !== (scenario.preconditionText || '') ||
+    JSON.stringify(preIds) !== JSON.stringify(scenario.preconditionIds || []) ||
+    stepsKey(steps) !== stepsKey(scenario.steps)
+  );
+
+  dirtyRef.current = dirty;
+
   const insertPoint = (afterIndex) => {
     const busy = running || insertState?.kind === 'recording';
     const prefixHasBinding = steps.slice(0, afterIndex + 1).some((st) => st.dataBinding);
@@ -364,6 +421,34 @@ export default function ScenarioDetail() {
         </div>
       );
     }
+    if (repeatPanel === afterIndex) {
+      const remaining = steps.length - (afterIndex + 1);
+      const n = Math.max(1, Math.min(parseInt(repeatCount, 10) || 1, remaining));
+      const firstStep = steps[afterIndex + 1];
+      const firstOk = firstStep && firstStep.action === 'click' && JSON.parse(firstStep.candidates || '[]').length > 0;
+      return (
+        <div className="card" style={{ margin: '4px 0 10px 34px', padding: 12, borderStyle: 'dashed' }}>
+          <div style={{ fontSize: 13, marginBottom: 8 }}>
+            {afterIndex + 2}. adımdan başlayan kaç adım her satır için tekrarlansın?
+            Bloğun ilk adımı ({describeStep(firstStep)}) hangi satırların işleneceğini belirler:
+            TestFlow o elemana benzeyen tüm satırları bulur ve her biri için adımları sırayla çalıştırır.
+          </div>
+          <div className="row" style={{ gap: 8 }}>
+            <input value={repeatCount} onChange={(e) => setRepeatCount(e.target.value)} inputMode="numeric" style={{ width: 70 }} />
+            <span className="muted" style={{ fontSize: 13 }}>
+              adım: {afterIndex + 2}–{afterIndex + 1 + n}. adımlar
+            </span>
+            <button onClick={() => wrapInRepeat(afterIndex, n)} disabled={!firstOk}>🔁 Tekrar bloğu oluştur</button>
+            <button className="ghost" onClick={() => setRepeatPanel(null)}>Vazgeç</button>
+          </div>
+          {!firstOk && (
+            <div style={{ fontSize: 12, marginTop: 6, color: 'var(--yellow)' }}>
+              Bloğun ilk adımı, kayıtta ilk satıra tıkladığınız bir click adımı olmalı.
+            </div>
+          )}
+        </div>
+      );
+    }
     if (insertMenu === afterIndex) {
       return (
         <div className="row" style={{ margin: '2px 0 10px 34px', gap: 6, flexWrap: 'wrap' }}>
@@ -375,6 +460,20 @@ export default function ScenarioDetail() {
           <button className="ghost" onClick={() => insertSteps(afterIndex, [blankStep('goto', startUrl || scenario.startUrl)])}>
             🌐 Adrese git
           </button>
+          <button className="ghost" title="Sayfadaki tüm sorularda bir seçeneği işaretle, metin alanlarını doldur"
+                  onClick={() => insertSteps(afterIndex, [{ ...blankStep('fill-form'), meta: JSON.stringify({ form: DEFAULT_FORM }) }])}>
+            📝 Formu toplu doldur
+          </button>
+          <button className="ghost" title="Sayfada konsoldaki gibi JavaScript çalıştır"
+                  onClick={() => insertSteps(afterIndex, [blankStep('script', '')])}>
+            ⌨ Script
+          </button>
+          {afterIndex + 1 < steps.length && (
+            <button className="ghost" title="Sonraki adımları listedeki her satır için tekrarla"
+                    onClick={() => { setRepeatPanel(afterIndex); setInsertMenu(null); }}>
+              🔁 Buradan itibaren tekrarla
+            </button>
+          )}
           <button className="ghost" onClick={() => insertSteps(afterIndex, [blankStep('click')])}
                   title="Locator'sız boş adım — genelde kayıtla eklemek daha doğrudur">
             Boş adım
@@ -443,6 +542,12 @@ export default function ScenarioDetail() {
           <button className="ghost" onClick={() => setShowRun(!showRun)} disabled={running || steps.length === 0}>
             {running ? '▶ Koşuyor…' : '▶ Koş'}
           </button>
+          {dirty && !saved && (
+            <span style={{ fontSize: 13, color: 'var(--yellow)' }}
+                  title="Toplu koşum ve Koşum Geçmişi'ndeki 'Tekrar Koş', senaryonun kayıtlı halini kullanır">
+              ● Kaydedilmemiş değişiklik
+            </span>
+          )}
           <button onClick={save}>{saved ? 'Kaydedildi ✓' : 'Kaydet'}</button>
         </div>
       </div>
@@ -651,6 +756,13 @@ export default function ScenarioDetail() {
       {insertPoint(-1)}
       {steps.map((step, i) => {
         const binding = step.dataBinding ? JSON.parse(step.dataBinding) : null;
+        // Tekrar bloğu içindeki adımlar girintili gösterilir
+        let depth = 0;
+        for (let j = 0; j < i; j++) {
+          if (steps[j].action === 'repeat-start') depth++;
+          if (steps[j].action === 'repeat-end') depth = Math.max(0, depth - 1);
+        }
+        if (step.action === 'repeat-end') depth = Math.max(0, depth - 1);
         let firstCandidate = null;
         try {
           const cands = JSON.parse(step.candidates || '[]');
@@ -660,6 +772,8 @@ export default function ScenarioDetail() {
           <div key={step.id || `new-${i}`}>
           <div className="card" style={{
             marginBottom: 10, padding: 14,
+            ...(depth > 0 ? { marginLeft: depth * 28, borderLeft: '4px solid var(--accent)' } : {}),
+            ...(['repeat-start', 'repeat-end'].includes(step.action) ? { background: 'var(--accent-soft)' } : {}),
             ...(step._batch ? { borderColor: 'var(--accent)', boxShadow: '0 0 0 1px var(--accent)' } : {}),
           }}>
             <div className="row" style={{ marginBottom: 10, alignItems: 'flex-start' }}>
@@ -690,11 +804,15 @@ export default function ScenarioDetail() {
                         const cfg = VALUE_CONFIG[next];
                         // Değer kullanmayan aksiyona geçince bağlama/gizli temizlenir; yoksa
                         // koşumda "anahtar veri setinde yok" gibi anlamsız hatalar çıkabilirdi
+                        let meta = {};
+                        try { meta = JSON.parse(step.meta || '{}'); } catch {}
+                        if (next === 'fill-form' && !meta.form) meta.form = DEFAULT_FORM;
                         updateStep(i, {
                           action: next,
-                          ...(!cfg?.binding ? { dataBinding: null } : {}),
+                          meta: JSON.stringify(meta),
+                          ...(!cfg?.binding && next !== 'fill-form' ? { dataBinding: null } : {}),
                           ...(!cfg?.sensitive ? { sensitive: false } : {}),
-                          ...(!cfg ? { value: '' } : {}),
+                          ...(!cfg || next === 'fill-form' ? { value: '' } : {}),
                         });
                       }}
                       style={{ width: 150 }}>
@@ -705,6 +823,9 @@ export default function ScenarioDetail() {
                 const cfg = VALUE_CONFIG[step.action];
                 if (!cfg) {
                   return <span className="muted" style={{ flex: 1, fontSize: 13 }}>Bu adım değer gerektirmez</span>;
+                }
+                if (cfg.panel) {
+                  return <span className="muted" style={{ flex: 1, fontSize: 13 }}>Ayarlar aşağıda</span>;
                 }
                 return (
                   <>
@@ -783,10 +904,112 @@ export default function ScenarioDetail() {
               <button className="ghost" onClick={() => moveStep(i, 1)}>↓</button>
               <button className="danger" onClick={() => removeStep(i)}>✕</button>
             </div>
+            {step.action === 'fill-form' && (() => {
+              let meta = {};
+              try { meta = JSON.parse(step.meta || '{}'); } catch {}
+              const form = { ...DEFAULT_FORM, ...(meta.form || {}) };
+              const setForm = (patch) => updateMeta(i, 'form', { ...form, ...patch });
+              const small = { fontSize: 13, padding: '4px 8px' };
+              return (
+                <div style={{ marginTop: 10, marginLeft: 34, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{ width: 150, fontSize: 13 }}>Seçenekli sorular</span>
+                    <select value={form.choice.mode} style={{ ...small, width: 200 }}
+                            onChange={(e) => setForm({ choice: { ...form.choice, mode: e.target.value } })}>
+                      <option value="label">Etiketine göre seç</option>
+                      <option value="index">Sırasına göre seç</option>
+                      <option value="random">Rastgele seç</option>
+                      <option value="none">Dokunma</option>
+                    </select>
+                    {['label', 'index'].includes(form.choice.mode) && (
+                      <input value={form.choice.value ?? ''} style={{ ...small, width: 220 }}
+                             placeholder={form.choice.mode === 'label' ? 'örn. Evet' : 'örn. 1 (son seçenek: -1)'}
+                             onChange={(e) => setForm({ choice: { ...form.choice, value: e.target.value } })} />
+                    )}
+                  </div>
+                  <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{ width: 150, fontSize: 13 }}>Metin / yorum alanları</span>
+                    <select value={form.text.mode} style={{ ...small, width: 200 }}
+                            onChange={(e) => {
+                              const mode = e.target.value;
+                              setForm({ text: { mode } });
+                              if (mode !== 'binding') updateStep(i, { dataBinding: null });
+                            }}>
+                      <option value="random">Rastgele metin</option>
+                      <option value="fixed">Sabit değer</option>
+                      <option value="binding">Test verisinden</option>
+                      <option value="none">Dokunma</option>
+                    </select>
+                    {form.text.mode === 'fixed' && (
+                      <input value={step.value ?? ''} placeholder="Yazılacak değer" style={{ ...small, width: 220 }}
+                             onChange={(e) => updateStep(i, { value: e.target.value })} />
+                    )}
+                    {form.text.mode === 'binding' && (
+                      <select value={binding ? binding.dataSetKey : ''} style={{ ...small, width: 220 }}
+                              onChange={(e) => updateStep(i, {
+                                dataBinding: e.target.value ? JSON.stringify({ dataSetKey: e.target.value }) : null,
+                              })}>
+                        <option value="">Anahtar seçin…</option>
+                        {keysFor('fill').map((k) => <option key={k} value={k}>📎 {k}</option>)}
+                      </select>
+                    )}
+                  </div>
+                  <label className="row muted" style={{ fontSize: 12, gap: 6 }}>
+                    <input type="checkbox" checked={form.onlyEmpty !== false} style={{ width: 'auto' }}
+                           onChange={(e) => setForm({ onlyEmpty: e.target.checked })} />
+                    Yalnız boş olanları doldur (önceden cevaplanmış soru ve dolu alanlara dokunma)
+                  </label>
+                  {form.choice.mode === 'label' && !String(form.choice.value || '').trim() && (
+                    <span style={{ fontSize: 12, color: 'var(--yellow)' }}>Seçilecek seçeneğin etiketini yazın (örn. Evet).</span>
+                  )}
+                </div>
+              );
+            })()}
+
+            {step.action === 'repeat-start' && (() => {
+              let meta = {};
+              try { meta = JSON.parse(step.meta || '{}'); } catch {}
+              const rep = meta.repeat || {};
+              const setRep = (patch) => updateMeta(i, 'repeat', { ...rep, ...patch });
+              const small = { fontSize: 13, padding: '4px 8px', width: 70 };
+              return (
+                <div style={{ marginTop: 10, marginLeft: 34, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div className="row" style={{ gap: 8, flexWrap: 'wrap', fontSize: 13 }}>
+                    <span>İlk</span>
+                    <input value={rep.skip ?? ''} placeholder="0" inputMode="numeric" style={small}
+                           onChange={(e) => setRep({ skip: e.target.value })} />
+                    <span>satırı atla, en fazla</span>
+                    <input value={rep.max ?? ''} placeholder="tümü" inputMode="numeric" style={small}
+                           onChange={(e) => setRep({ max: e.target.value })} />
+                    <span>satır işle</span>
+                  </div>
+                  <span className="muted" style={{ fontSize: 12 }}>
+                    Bloğun ilk adımındaki elemana benzeyen satırlar her koşumda yeniden sayılır. Blok içindeki adımlar
+                    aynı sayfada kalmalı (modal, panel gibi); sayfa değiştiren bir adım döngüyü durdurur.
+                    Raporda her satırın sonucu ayrı görünür.
+                  </span>
+                </div>
+              );
+            })()}
+
+            {step.action === 'script' && (
+              <div style={{ marginTop: 10, marginLeft: 34, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <textarea value={step.value ?? ''} rows={7} spellCheck={false}
+                          onChange={(e) => updateStep(i, { value: e.target.value })}
+                          placeholder={"// Sayfada konsoldaki gibi çalışır. Örnek:\ndocument.querySelectorAll('input[value=\"evet\"]').forEach((r) => r.click());\nreturn true;"}
+                          style={{ width: '100%', fontFamily: 'Consolas, Menlo, monospace', fontSize: 13, resize: 'vertical' }} />
+                <span className="muted" style={{ fontSize: 12 }}>
+                  Kod sayfanın içinde, tarayıcı konsolundaki gibi çalışır; <code>await</code> kullanılabilir.
+                  Test verisine <code>testData.anahtar</code> ile erişilir. Hata fırlatırsa ya da <code>false</code> döndürürse
+                  adım başarısız sayılır; döndürülen başka bir değer raporda not olarak görünür. Varsayılan süre sınırı 30 sn.
+                </span>
+              </div>
+            )}
+
             {(() => {
               let meta = {};
               try { meta = JSON.parse(step.meta || '{}'); } catch {}
-              const needsElement = !['wait', 'goto'].includes(step.action);
+              const needsElement = !['wait', 'goto', 'fill-form', 'script', 'repeat-start', 'repeat-end'].includes(step.action);
               const stat = step.id ? waitStats[step.id] : null;
               const effectiveMs = meta.timeoutMs || (resolveTimeout({
                 scenario: { timeoutMs: scenarioTimeoutMs() }, project: projects.find((p) => p.active),

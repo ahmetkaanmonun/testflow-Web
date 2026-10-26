@@ -81,6 +81,29 @@ Senaryo detayında:
   kullanın ve **Kaydı Bitir**'e basın; adımlar seçtiğiniz yere eklenir.
   Önceki adımlardan biri geçmezse kayda geçilmez ve nedeni gösterilir.
 - **⏱ Bekleme** / **🌐 Adrese git** — element gerektirmeyen adımlar.
+- **📝 Formu toplu doldur** — anket gibi çok sorulu ekranlar için. Sayfadaki
+  tüm seçenekli sorularda (radyo düğmeleri, açılır listeler) bir seçeneği
+  işaretler: etiketine göre ("Evet"), sırasına göre (1, son için -1) ya da
+  rastgele. Metin/yorum alanlarını rastgele metinle, sabit bir değerle ya da
+  test verisiyle doldurur. "Yalnız boş olanları doldur" açıkken önceden
+  cevaplanmış sorulara dokunmaz. Raporda kaç soru işaretlendiği yazar; bir
+  soruda istenen seçenek yoksa adım başarısız olur.
+- **🔁 Buradan itibaren tekrarla** — listedeki her satır için aynı işlemleri
+  yapmak üzere (örn. her satıra tıkla, açılan modalda "tümünü işaretle", kaydet).
+  Önce tek bir turu normal şekilde kaydedin (ilk satıra tıklayıp modalı
+  tamamlayın). Sonra ilk satır tıklamasının önündeki ＋ menüsünden bu seçeneği
+  seçip kaç adımın tekrarlanacağını girin. Bloğun ilk adımı hangi satırların
+  işleneceğini belirler: TestFlow o elemana benzeyen tüm satırları her koşumda
+  yeniden sayar. Bloğun ayarlarında ilk N satırı atlayabilir ya da işlenecek
+  satır sayısını sınırlayabilirsiniz. Blok içindeki adımlar aynı sayfada
+  kalmalıdır; raporda her satırın sonucu ayrı, "Satır 3/15" şeklinde görünür.
+- **⌨ Script** — kalıba uymayan durumlar için. Yazdığınız JavaScript sayfada,
+  tarayıcı konsolundaki gibi çalışır (`await` kullanılabilir, veri setine
+  `testData.anahtar` ile erişilir). Hata fırlatır ya da `false` döndürürse
+  adım başarısız olur. Script adımları kendini onarmaz; mümkünse sonunda bir
+  kontrol yapıp sorun varsa hata fırlatın. Bazı sitelerin güvenlik politikası
+  (CSP) script çalıştırmayı engelleyebilir; bu durumda adım bunu söyleyerek
+  başarısız olur.
 
 Eklenen adımlar çerçeveli görünür; **Geri al** ile çıkarabilir, **Kaydet**
 ile kalıcı hale getirirsiniz.

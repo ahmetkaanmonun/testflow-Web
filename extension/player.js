@@ -12,6 +12,18 @@
   const { steps } = state;
   const runConfig = state.runConfig || {};
   let index = state.index;
+  // Önceki sayfada başlayan script adımı sayfa geçişi yaptı: o adım tamamlandı sayılır
+  if (state.pendingScript != null && state.pendingScript === index && steps[index]) {
+    let snap = null;
+    try { snap = JSON.stringify({ action: 'script', target: null, value: null, dataBindingKey: null, sensitive: false,
+                                  meta: JSON.parse(steps[index].meta || '{}') }); } catch {}
+    await chrome.runtime.sendMessage({
+      type: 'STEP_RESULT',
+      result: { orderIndex: index, stepId: steps[index].id ?? null, stepSnapshot: snap, status: 'passed', healed: false,
+                finishedAt: Date.now(), errorMessage: 'Not: script sayfa geçişi başlattı; adım tamamlandı sayıldı.' },
+    });
+    index += 1;
+  }
 
   // ---------- Koşum çubuğu ----------
   const barEl = document.createElement('div');
@@ -62,8 +74,15 @@
     return r.width > 0 && r.height > 0;
   }
 
+  // Tarayıcının gerçekten tıklamayı engellediği durum: yerel form elemanında disabled.
+  function isNativelyDisabled(el) {
+    return !!(el.disabled || (el.closest('fieldset[disabled]') && 'disabled' in el));
+  }
+  // Daha geniş tanım (aria-disabled dahil) — yalnız "tıklanabilir olsun" koşulunda.
+  // Bazı arayüz kütüphaneleri tıklanabilir elemanlarda da aria-disabled bırakır;
+  // varsayılan modda buna bakmak, elle çalışan adımı boşuna bekletiyordu.
   function isDisabled(el) {
-    return !!(el.disabled || el.getAttribute('aria-disabled') === 'true' || el.closest('fieldset[disabled]'));
+    return isNativelyDisabled(el) || el.getAttribute('aria-disabled') === 'true';
   }
 
   // Elementin merkezi başka bir katmanın (loading overlay, modal arkası) altında mı?
@@ -88,7 +107,7 @@
     const fileInput = el.tagName === 'INPUT' && el.type === 'file';
     if (waitFor === 'exists') return true;
     if (!isVisible(el) && !fileInput) return false;
-    if (action === 'click' && isDisabled(el)) return false;
+    if (action === 'click' && isNativelyDisabled(el)) return false;
     if (waitFor === 'enabled') return !isDisabled(el) && (fileInput || !isCovered(el));
     return true;
   }
@@ -191,10 +210,11 @@
     return JSON.stringify({
       action: step.action,
       target,
-      value: hideValue ? null : (step.value ?? null),
+      value: hideValue ? null : (step.value == null ? null : String(step.value).slice(0, 500)),
       dataBindingKey: bindingKey,
       sensitive: !!step.sensitive,
       meta,
+      ...(loopCtx ? { iteration: loopCtx.iteration, iterations: loopCtx.total } : {}),
     });
   }
 
@@ -232,9 +252,15 @@
   // bulundu (bekleme bitti), finishedAt = sonuç raporlandı. Click/press sonucu
   // aksiyondan ÖNCE raporlandığı için onlarda finishedAt aksiyon anıdır.
   let timing = { startedAt: null, locatedAt: null };
+  // Tekrar bloğu içindeyken { iteration (1'den), total } — rapor ve snapshot'a yazılır
+  let loopCtx = null;
 
   // reportResult: sonucu background'a yazar (index ilerler)
   async function reportResult(stepIndex, step, result) {
+    // Tekrar bloğu içindeki başarısızlıkta hangi satırda olduğu mesajın başına yazılır
+    if (loopCtx && result.status !== 'passed' && result.errorMessage && !result.errorMessage.startsWith('Not: ')) {
+      result = { ...result, errorMessage: `${loopCtx.iteration}. satırda: ${result.errorMessage}` };
+    }
     await chrome.runtime.sendMessage({
       type: 'STEP_RESULT',
       result: {
@@ -264,6 +290,216 @@
     return { timeoutMs: clamp(Math.round(base * factor)), waitFor };
   }
 
+  // ---------- Formu toplu doldur: yardımcılar ----------
+  const norm = (t) => String(t || '').toLocaleLowerCase('tr-TR').replace(/\s+/g, ' ').trim();
+
+  // Seçeneğin kullanıcıya görünen etiketi
+  function optionLabel(el) {
+    if (el.tagName === 'OPTION') return el.text || el.value || '';
+    if (el.id) {
+      const l = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+      if (l && l.innerText.trim()) return l.innerText.trim();
+    }
+    const wrap = el.closest('label');
+    if (wrap && wrap.innerText.trim()) return wrap.innerText.trim();
+    const aria = el.getAttribute('aria-label');
+    if (aria && aria.trim()) return aria.trim();
+    if (el.getAttribute('role') === 'radio' && el.innerText.trim()) return el.innerText.trim();
+    let n = el.nextSibling;
+    while (n && !String(n.textContent || '').trim()) n = n.nextSibling;
+    if (n && String(n.textContent || '').trim()) return String(n.textContent).trim().slice(0, 80);
+    return el.value || '';
+  }
+
+  // Görünür mü — özel tasarımlı radyolarda input gizlidir, etiketi görünür
+  function shownOrLabelShown(el) {
+    if (isVisible(el)) return true;
+    const lbl = el.closest('label') || (el.id && document.querySelector(`label[for="${CSS.escape(el.id)}"]`));
+    return !!(lbl && isVisible(lbl));
+  }
+
+  // Sayfadaki seçenekli sorular: [{ kind: 'radio'|'select', options: [el], el? }]
+  function collectQuestions() {
+    const out = [];
+    const byName = new Map();
+    for (const r of document.querySelectorAll('input[type="radio"]')) {
+      if (r.disabled || !shownOrLabelShown(r)) continue;
+      const key = r.name ? `name:${r.form ? 'f' : ''}${r.name}` : r;
+      if (!byName.has(key)) byName.set(key, []);
+      byName.get(key).push(r);
+    }
+    for (const opts of byName.values()) out.push({ kind: 'radio', options: opts });
+    const byGroup = new Map();
+    for (const r of document.querySelectorAll('[role="radio"]')) {
+      if (r.tagName === 'INPUT' || !isVisible(r) || r.getAttribute('aria-disabled') === 'true') continue;
+      const g = r.closest('[role="radiogroup"]') || r.parentElement;
+      if (!byGroup.has(g)) byGroup.set(g, []);
+      byGroup.get(g).push(r);
+    }
+    for (const opts of byGroup.values()) out.push({ kind: 'radio', options: opts });
+    for (const sel of document.querySelectorAll('select')) {
+      if (sel.disabled || sel.multiple) continue;
+      // select2 gibi bileşenler asıl select'i gizler; yanındaki görünür bileşen yeterli
+      const proxy = sel.nextElementSibling;
+      if (!isVisible(sel) && !(proxy && /select2|chosen/.test(proxy.className || '') && isVisible(proxy))) continue;
+      const options = [...sel.options].filter((o) => !o.disabled && o.value !== '');
+      if (options.length) out.push({ kind: 'select', el: sel, options });
+    }
+    return out;
+  }
+
+  function collectTextFields() {
+    return [...document.querySelectorAll('textarea, input:not([type]), input[type="text"]')]
+      .filter((el) => isVisible(el) && !el.disabled && !el.readOnly);
+  }
+
+  function pickOption(options, choice) {
+    if (choice.mode === 'random') return options[Math.floor(Math.random() * options.length)];
+    if (choice.mode === 'index') {
+      const n = parseInt(choice.value, 10) || 1;
+      return n > 0 ? options[n - 1] : options[options.length + n]; // -1 = son seçenek
+    }
+    const want = norm(choice.value);
+    if (!want) return null;
+    return options.find((o) => norm(optionLabel(o)) === want)
+        || options.find((o) => norm(optionLabel(o)).includes(want));
+  }
+
+  const isChosen = (o) => !!o.checked || o.getAttribute('aria-checked') === 'true' || !!o.selected;
+
+  function randomText() {
+    const words = ['Otomasyon', 'test', 'yorumu', 'örnek', 'değerlendirme', 'kontrol', 'notu'];
+    const pick = () => words[Math.floor(Math.random() * words.length)];
+    return `${pick()} ${pick()} ${Math.floor(1000 + Math.random() * 9000)}`;
+  }
+
+  async function fillForm(cfg, step, timeoutMs, failStatus, failPrefix) {
+    const choice = cfg.choice || { mode: 'none' };
+    const text = cfg.text || { mode: 'none' };
+    const onlyEmpty = cfg.onlyEmpty !== false;
+    // Sayfa yüklenirken alanlar geç gelebilir: en az bir hedef görünene kadar bekle
+    const deadline = Date.now() + timeoutMs;
+    let questions = [], fields = [];
+    while (Date.now() < deadline) {
+      questions = choice.mode !== 'none' ? collectQuestions() : [];
+      fields = text.mode !== 'none' ? collectTextFields() : [];
+      if (questions.length || fields.length) break;
+      await sleep(250);
+    }
+    timing.locatedAt = Date.now();
+    if (!questions.length && !fields.length) {
+      return { status: failStatus, healed: false, screenshot: await captureScreenshot(),
+               errorMessage: failPrefix + `${secs(timeoutMs)} sn içinde sayfada doldurulacak soru veya metin alanı bulunamadı.` };
+    }
+
+    let marked = 0, alreadySet = 0;
+    const unmatched = [];
+    for (const q of questions) {
+      if (onlyEmpty && q.options.some(isChosen) && !(q.kind === 'select' && q.el.selectedIndex <= 0)) { alreadySet++; continue; }
+      const opt = pickOption(q.options, choice);
+      if (!opt) { unmatched.push(q); continue; }
+      if (q.kind === 'select') {
+        setNativeValue(q.el, opt.value);
+      } else {
+        const target = isVisible(opt) ? opt
+          : (opt.closest('label') || (opt.id && document.querySelector(`label[for="${CSS.escape(opt.id)}"]`)) || opt);
+        target.scrollIntoView({ block: 'center' });
+        realisticClick(target);
+      }
+      marked++;
+      await sleep(60); // arayüz tepki versin (koşullu sorular, doğrulama)
+    }
+
+    let filled = 0;
+    if (text.mode !== 'none') {
+      // Seçim yapılınca yeni yorum alanları açılmış olabilir — yeniden topla
+      for (const f of collectTextFields()) {
+        if (onlyEmpty && String(f.value || '').trim()) continue;
+        const v = text.mode === 'random' ? randomText() : String(step.value ?? '');
+        if (!v) continue;
+        f.scrollIntoView({ block: 'center' });
+        try { f.focus(); } catch {}
+        setNativeValue(f, v);
+        f.dispatchEvent(new Event('blur', { bubbles: true }));
+        filled++;
+        await sleep(30);
+      }
+    }
+
+    const summary = [
+      choice.mode !== 'none' ? `${marked} soru işaretlendi` : null,
+      alreadySet ? `${alreadySet} soru zaten cevaplıydı` : null,
+      text.mode !== 'none' ? `${filled} metin alanı dolduruldu` : null,
+    ].filter(Boolean).join(', ');
+
+    if (unmatched.length) {
+      const what = choice.mode === 'index' ? `${choice.value}. seçenek` : `'${choice.value}' seçeneği`;
+      return { status: failStatus, healed: false, screenshot: await captureScreenshot(),
+               errorMessage: failPrefix + `${questions.length} sorudan ${unmatched.length} tanesinde ${what} bulunamadı. (${summary})` };
+    }
+    return { status: 'passed', healed: false, screenshot: await captureScreenshot(), errorMessage: `Not: ${summary}.` };
+  }
+
+  // ---------- Tekrar bloğu: satır bulma ----------
+  // Durum sınıfları (seçili, tek/çift satır…) satırlar arasında farklılaşır; otomatik
+  // üretilen sınıflar her derlemede değişir. İkisi de benzerlik karşılaştırmasında yok sayılır.
+  const STATE_CLASS = /(^|[-_])(active|selected|hover|focus|focused|odd|even|open|opened|expanded|collapsed|checked|current|highlight|highlighted|disabled)($|[-_])|^(is|has)-/i;
+  const HASHY_CLASS = /^(css|sc|jss|emotion)-|[a-z]*\d[a-z0-9]{4,}$|__[A-Za-z0-9]{5,}$/;
+  const stableClasses = (el) => [...el.classList].filter((c) => !STATE_CLASS.test(c) && !HASHY_CLASS.test(c));
+
+  function similarTo(ref) {
+    const cls = stableClasses(ref);
+    return (el) => el.tagName === ref.tagName &&
+      cls.every((c) => el.classList.contains(c)) &&
+      Math.abs(el.childElementCount - ref.childElementCount) <= 1;
+  }
+
+  // Kardeşler alt alta mı dizili (satır) yoksa yan yana mı (hücre/sütun)?
+  function stackedVertically(els) {
+    const tops = new Set(els.map((e) => Math.round(e.getBoundingClientRect().top)));
+    return tops.size >= Math.min(els.length, 2) && tops.size > els.length / 2;
+  }
+
+  // anchor: kayıtta ilk satırda tıklanan element. Dönen: { rows, rowEl, path }
+  function discoverRows(anchor) {
+    const candidatesUp = [];
+    // Açık satır yapıları öncelikli: tablo satırı, ARIA satırı, liste elemanı
+    for (const sel of ['tr', '[role="row"]', 'li']) {
+      const r = anchor.closest(sel);
+      if (r && !candidatesUp.includes(r)) candidatesUp.push(r);
+    }
+    for (let cur = anchor; cur && cur.parentElement && cur !== document.body; cur = cur.parentElement) {
+      if (!candidatesUp.includes(cur)) candidatesUp.push(cur);
+    }
+    for (const rowEl of candidatesUp) {
+      const parent = rowEl.parentElement;
+      if (!parent) continue;
+      const rows = [...parent.children].filter((x) => similarTo(rowEl)(x) && isVisible(x));
+      if (rows.length >= 2 && (rowEl.tagName === 'TR' || rowEl.getAttribute('role') === 'row' || stackedVertically(rows))) {
+        // satırdan hedefe giden yol (çocuk sırası + etiket) — diğer satırlarda aynı hedefi bulmak için
+        const path = [];
+        for (let n = anchor; n !== rowEl; n = n.parentElement) {
+          path.unshift({ idx: [...n.parentElement.children].indexOf(n), tag: n.tagName });
+        }
+        return { rows, rowEl, path, anchorTag: anchor.tagName, anchorClasses: stableClasses(anchor) };
+      }
+    }
+    return null;
+  }
+
+  function targetInRow(row, info) {
+    let n = row;
+    for (const p of info.path) {
+      const next = n.children[p.idx];
+      if (!next || next.tagName !== p.tag) { n = null; break; }
+      n = next;
+    }
+    if (n) return n;
+    // Yapı küçük farklılık gösteriyorsa: satır içinde aynı tür ve sınıftaki ilk element
+    const sel = info.anchorTag.toLowerCase() + info.anchorClasses.map((c) => '.' + CSS.escape(c)).join('');
+    return row.querySelector(sel) || row;
+  }
+
   async function captureScreenshot() {
     try {
       const res = await chrome.runtime.sendMessage({ type: 'CAPTURE' });
@@ -271,7 +507,7 @@
     } catch { return null; }
   }
 
-  async function executeStep(step, stepIndex) {
+  async function executeStep(step, stepIndex, opts = {}) {
     timing = { startedAt: Date.now(), locatedAt: null };
     // Opsiyonel adım: başarısızlık koşumu kesmez, 'skipped' olarak geçilir
     // (bazı kayıtlarda alan dolu/kilitli gelir veya hiç görünmez).
@@ -316,9 +552,43 @@
       return r;
     }
 
+    // ---------- Formu toplu doldur ----------
+    if (step.action === 'fill-form') {
+      let cfg = {};
+      try { cfg = JSON.parse(step.meta || '{}').form || {}; } catch {}
+      const r = await fillForm(cfg, step, resolveWait(step, optional).timeoutMs, failStatus, failPrefix);
+      await reportResult(stepIndex, step, r);
+      return r;
+    }
+
+    // ---------- Script çalıştır ----------
+    if (step.action === 'script') {
+      const code = String(step.value || '');
+      if (!code.trim()) {
+        const r = { status: failStatus, healed: false, errorMessage: failPrefix + 'Script boş.' };
+        await reportResult(stepIndex, step, r);
+        return r;
+      }
+      let own = 0;
+      try { own = Number(JSON.parse(step.meta || '{}').timeoutMs) || 0; } catch {}
+      await chrome.runtime.sendMessage({ type: 'SCRIPT_STARTED', index: stepIndex });
+      const res = await chrome.runtime.sendMessage({
+        type: 'EXEC_SCRIPT', code, testData: runConfig.testData || {}, timeoutMs: own > 0 ? Math.min(own, 300000) : 30000,
+      });
+      const r = res && res.ok
+        ? { status: 'passed', healed: false, screenshot: await captureScreenshot(),
+            ...(res.value != null && res.value !== 'true' ? { errorMessage: `Not: script sonucu: ${res.value}` } : {}) }
+        : { status: failStatus, healed: false, screenshot: await captureScreenshot(),
+            errorMessage: failPrefix + ((res && res.error) || 'Script false döndürdü.') };
+      await reportResult(stepIndex, step, r);
+      return r;
+    }
+
     const candidates = JSON.parse(step.candidates || '[]');
     const { timeoutMs, waitFor } = resolveWait(step, optional);
-    const found = await findElement(candidates, validatorFor(step), timeoutMs, waitFor, step.action);
+    const found = opts.overrideEl
+      ? { el: opts.overrideEl, usedIndex: 0, strategy: 'satır' } // tekrar bloğu: o turun satırındaki hedef
+      : await findElement(candidates, validatorFor(step), timeoutMs, waitFor, step.action);
     if (found.notFound) {
       const why = found.seenNotReady
         ? (waitFor === 'enabled' ? 'tıklanabilir hale gelmedi (pasif veya üstü başka bir katmanla kapalı)'
@@ -500,9 +770,127 @@
     }
   }
 
+  // ---------- Tekrar bloğu ----------
+  function matchingEnd(startIdx) {
+    let depth = 0;
+    for (let j = startIdx + 1; j < steps.length; j++) {
+      if (steps[j].action === 'repeat-start') depth++;
+      if (steps[j].action === 'repeat-end') { if (depth === 0) return j; depth--; }
+    }
+    return -1;
+  }
+
+  // Döngü sonucunu döner: { status } — failed ise koşum durur
+  async function runRepeat(startIdx) {
+    const start = steps[startIdx];
+    timing = { startedAt: Date.now(), locatedAt: null };
+    const endIdx = matchingEnd(startIdx);
+    const fail = async (msg, at = startIdx) => {
+      const r = { status: 'failed', healed: false, errorMessage: msg, screenshot: await captureScreenshot() };
+      await reportResult(at, steps[at], r);
+      return { status: 'failed', endIdx: endIdx < 0 ? steps.length - 1 : endIdx, failedAt: at };
+    };
+    if (endIdx < 0) return fail('Tekrar bloğunun sonu yok — bloğu bitiren "repeat-end" adımını ekleyin.');
+    const body = [];
+    for (let j = startIdx + 1; j < endIdx; j++) body.push(j);
+    const first = steps[body[0]];
+    if (!first || !JSON.parse(first.candidates || '[]').length) {
+      return fail('Tekrar bloğunun ilk adımı, ilk satırda tıklanan bir element olmalı (kayıtla eklenmiş bir click adımı).');
+    }
+    if (body.some((j) => steps[j].action === 'repeat-start')) return fail('İç içe tekrar blokları henüz desteklenmiyor.');
+
+    let cfg = {};
+    try { cfg = JSON.parse(start.meta || '{}').repeat || {}; } catch {}
+    const skip = Math.max(parseInt(cfg.skip, 10) || 0, 0);
+    const max = parseInt(cfg.max, 10) > 0 ? parseInt(cfg.max, 10) : Infinity;
+
+    // Satırları, ilk adımın (kayıttaki ilk satır) elementinden yola çıkarak bul
+    const locate = async () => {
+      const { timeoutMs } = resolveWait(first, false);
+      const f = await findElement(JSON.parse(first.candidates), validatorFor(first), timeoutMs, 'visible', first.action);
+      return f.notFound ? null : discoverRows(f.el);
+    };
+    const info0 = await locate();
+    timing.locatedAt = Date.now();
+    if (!info0) return fail(`${targetName(first)} bulunamadı ya da çevresinde tekrarlanan satır yapısı tespit edilemedi.`);
+    const total = Math.min(Math.max(info0.rows.length - skip, 0), max);
+    if (total === 0) return fail(`${info0.rows.length} satır bulundu, atlama ayarından sonra işlenecek satır kalmadı.`);
+    await reportResult(startIdx, start, { status: 'passed', healed: false,
+      errorMessage: `Not: ${info0.rows.length} satır bulundu, ${total} tanesi işlenecek.` });
+
+    for (let it = 0; it < total; it++) {
+      loopCtx = { iteration: it + 1, total };
+      setBar(`tekrar ${it + 1}/${total}`);
+      // Her turda satırlar yeniden bulunur: önceki işlem tabloyu yeniden çizmiş olabilir
+      const info = it === 0 ? info0 : await locate();
+      const row = info && info.rows[skip + it];
+      if (!row) {
+        const r = await fail(`${info ? info.rows.length : 0} satır kaldı; ${skip + it + 1}. satır artık yok (işlenen satırlar listeden kalkıyor olabilir).`, body[0]);
+        loopCtx = null;
+        return r;
+      }
+      row.scrollIntoView({ block: 'center' });
+      for (let k = 0; k < body.length; k++) {
+        const j = body[k];
+        setBar(`tekrar ${it + 1}/${total} — adım ${k + 1}/${body.length}: ${targetName(steps[j])}`);
+        const res = await executeStep(steps[j], j, k === 0 ? { overrideEl: targetInRow(row, info) } : {});
+        if (res.status === 'failed') { loopCtx = null; return { status: 'failed', endIdx, failedAt: j }; }
+        await sleep(400);
+      }
+    }
+    loopCtx = null;
+    timing = { startedAt: Date.now(), locatedAt: null };
+    await reportResult(endIdx, steps[endIdx], { status: 'passed', healed: false, errorMessage: `Not: ${total} satır işlendi.` });
+    return { status: 'passed', endIdx };
+  }
+
+  async function skipRest(from) {
+    for (let j = from; j < steps.length; j++) {
+      await chrome.runtime.sendMessage({
+        type: 'STEP_RESULT',
+        result: { ...resultBase(j, steps[j]), status: 'skipped', healed: false },
+      });
+    }
+  }
+
+  // Tekrar bloğunun içindeki bir adım sayfa değiştirdiyse döngü durumu kaybolur:
+  // kaldığı yerden "düz" devam etmek yanlış olurdu, açıkça başarısız sayılır.
+  {
+    let open = -1;
+    for (let j = 0; j < index && j < steps.length; j++) {
+      if (steps[j].action === 'repeat-start') open = j;
+      if (steps[j].action === 'repeat-end') open = -1;
+    }
+    if (open >= 0 && index < steps.length) {
+      await reportResult(index, steps[index], { status: 'failed', healed: false,
+        errorMessage: 'Tekrar bloğunun içindeki bir adım sayfa değiştirdi. Tekrar blokları şu an aynı sayfada kalmalı (modal, panel gibi).' });
+      await skipRest(index + 1);
+      index = steps.length;
+    }
+  }
+
   // ---------- Ana döngü ----------
   while (index < steps.length) {
     const step = steps[index];
+
+    if (step.action === 'repeat-start') {
+      const res = await runRepeat(index);
+      if (res.status === 'failed') {
+        // Bloğun kalanı ve sonrası atlandı
+        const after = (res.failedAt ?? index) + 1;
+        await skipRest(after);
+        break;
+      }
+      index = res.endIdx + 1;
+      await sleep(400);
+      continue;
+    }
+    if (step.action === 'repeat-end') { // eşleşmeyen bitiş: zararsız, geç
+      await reportResult(index, step, { status: 'passed', healed: false });
+      index += 1;
+      continue;
+    }
+
     setBar(`adım ${index + 1}/${steps.length}: ${targetName(step)} (${step.action})`);
 
     const result = await executeStep(step, index); // sonuç executeStep içinde raporlanır
