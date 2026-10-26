@@ -37,6 +37,16 @@ export default function ScenarioDetail() {
   const [steps, setSteps] = useState([]);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
+  const dirtyRef = useRef(false); // sayfa kapatılırken uyarı için
+  useEffect(() => {
+    const onBeforeUnload = (e) => {
+      if (!dirtyRef.current) return;
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, []);
   const [showRun, setShowRun] = useState(false);
   const [runEnv, setRunEnv] = useState('');
   const [runDataSets, setRunDataSets] = useState(new Set()); // çoklu veri seti (data-driven)
@@ -152,6 +162,7 @@ export default function ScenarioDetail() {
       method: 'PATCH',
       body: JSON.stringify({ steps: patchedSteps }),
     });
+    setScenario(updated); // kayıtlı hal güncellendi (kaydedilmemiş değişiklik takibi için)
     setSteps(updated.steps || []);
     return updated.steps || patchedSteps;
   };
@@ -328,6 +339,25 @@ export default function ScenarioDetail() {
     navigate('/runs');
   };
 
+  // ---------- Kaydedilmemiş değişiklik takibi ----------
+  // Ekrandaki taslak ile sunucudaki kayıtlı hal karşılaştırılır. Senaryo sayfasındaki
+  // ▶ Koş taslağı kullanır; ama toplu koşum ve "Tekrar Koş" KAYITLI hali kullandığı
+  // için kaydedilmemiş bir değişiklik (örn. "ops." işareti) oralarda geçerli olmaz.
+  const stepsKey = (list) => JSON.stringify((list || []).map((st) => [
+    st.id ?? null, st.action, st.candidates, st.value ?? '', st.dataBinding ?? null, !!st.sensitive, st.meta ?? '{}',
+  ]));
+  const dirty = !!scenario && (
+    (name || '') !== (scenario.name || '') ||
+    (startUrl || '') !== (scenario.startUrl || '') ||
+    (folderId || '') !== (scenario.folderId || '') ||
+    (scenarioTimeoutMs() ?? null) !== (scenario.timeoutMs ?? null) ||
+    (preText || '') !== (scenario.preconditionText || '') ||
+    JSON.stringify(preIds) !== JSON.stringify(scenario.preconditionIds || []) ||
+    stepsKey(steps) !== stepsKey(scenario.steps)
+  );
+
+  dirtyRef.current = dirty;
+
   const insertPoint = (afterIndex) => {
     const busy = running || insertState?.kind === 'recording';
     const prefixHasBinding = steps.slice(0, afterIndex + 1).some((st) => st.dataBinding);
@@ -443,6 +473,12 @@ export default function ScenarioDetail() {
           <button className="ghost" onClick={() => setShowRun(!showRun)} disabled={running || steps.length === 0}>
             {running ? '▶ Koşuyor…' : '▶ Koş'}
           </button>
+          {dirty && !saved && (
+            <span style={{ fontSize: 13, color: 'var(--yellow)' }}
+                  title="Toplu koşum ve Koşum Geçmişi'ndeki 'Tekrar Koş', senaryonun kayıtlı halini kullanır">
+              ● Kaydedilmemiş değişiklik
+            </span>
+          )}
           <button onClick={save}>{saved ? 'Kaydedildi ✓' : 'Kaydet'}</button>
         </div>
       </div>

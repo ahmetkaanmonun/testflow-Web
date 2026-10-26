@@ -62,8 +62,15 @@
     return r.width > 0 && r.height > 0;
   }
 
+  // Tarayıcının gerçekten tıklamayı engellediği durum: yerel form elemanında disabled.
+  function isNativelyDisabled(el) {
+    return !!(el.disabled || (el.closest('fieldset[disabled]') && 'disabled' in el));
+  }
+  // Daha geniş tanım (aria-disabled dahil) — yalnız "tıklanabilir olsun" koşulunda.
+  // Bazı arayüz kütüphaneleri tıklanabilir elemanlarda da aria-disabled bırakır;
+  // varsayılan modda buna bakmak, elle çalışan adımı boşuna bekletiyordu.
   function isDisabled(el) {
-    return !!(el.disabled || el.getAttribute('aria-disabled') === 'true' || el.closest('fieldset[disabled]'));
+    return isNativelyDisabled(el) || el.getAttribute('aria-disabled') === 'true';
   }
 
   // Elementin merkezi başka bir katmanın (loading overlay, modal arkası) altında mı?
@@ -88,7 +95,7 @@
     const fileInput = el.tagName === 'INPUT' && el.type === 'file';
     if (waitFor === 'exists') return true;
     if (!isVisible(el) && !fileInput) return false;
-    if (action === 'click' && isDisabled(el)) return false;
+    if (action === 'click' && isNativelyDisabled(el)) return false;
     if (waitFor === 'enabled') return !isDisabled(el) && (fileInput || !isCovered(el));
     return true;
   }
