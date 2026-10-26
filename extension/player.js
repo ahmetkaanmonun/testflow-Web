@@ -38,14 +38,32 @@
   setBar(`adım ${index + 1}/${steps.length}`);
 
   // ---------- Element bulma (self-healing) ----------
+  // Gerçekten görünür mü: boyutu olması yetmez — visibility:hidden, opacity:0 ya da
+  // display:none bir ebeveynin altındaki eleman da boyut taşıyabilir.
+  function reallyVisible(el) {
+    if (!isVisible(el)) return false;
+    if (typeof el.checkVisibility === 'function') {
+      return el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
+    }
+    const st = getComputedStyle(el);
+    return st.visibility !== 'hidden' && st.opacity !== '0';
+  }
+
+  // Aynı locator'a uyan birden fazla eleman varsa (örn. sayfada gizli tutulan
+  // ikinci bir onay penceresi) gerçekten görünen tercih edilir; hiçbiri değilse ilki.
+  function pickVisible(list) {
+    const arr = [...list];
+    return arr.find(reallyVisible) || arr[0] || null;
+  }
+
   function findByCandidate(c) {
     try {
       switch (c.strategy) {
         case 'id': return document.getElementById(c.value);
-        case 'data-testid': return document.querySelector(`[data-testid="${CSS.escape(c.value)}"]`);
-        case 'name': return document.querySelector(`[name="${CSS.escape(c.value)}"]`);
-        case 'aria-label': return document.querySelector(`[aria-label="${CSS.escape(c.value)}"]`);
-        case 'placeholder': return document.querySelector(`[placeholder="${CSS.escape(c.value)}"]`);
+        case 'data-testid': return pickVisible(document.querySelectorAll(`[data-testid="${CSS.escape(c.value)}"]`));
+        case 'name': return pickVisible(document.querySelectorAll(`[name="${CSS.escape(c.value)}"]`));
+        case 'aria-label': return pickVisible(document.querySelectorAll(`[aria-label="${CSS.escape(c.value)}"]`));
+        case 'placeholder': return pickVisible(document.querySelectorAll(`[placeholder="${CSS.escape(c.value)}"]`));
         case 'text': {
           const nodes = [...document.querySelectorAll('button, a, label, span, div, [role="button"]')]
             .filter((n) => (n.innerText || '').trim().slice(0, 60) === c.value);
@@ -55,13 +73,14 @@
             ['BUTTON', 'A'].includes(n.tagName) || n.getAttribute('role') === 'button');
           const pool = clickable.length ? clickable : nodes;
           // En derin eşleşme: içinde başka eşleşme barındırmayan
-          // (butonu saran div yerine butonun kendisi seçilir)
-          return pool.find((n) => !pool.some((m) => m !== n && n.contains(m))) || pool[0];
+          // (butonu saran div yerine butonun kendisi seçilir); görünür olan önce
+          const deepest = pool.filter((n) => !pool.some((m) => m !== n && n.contains(m)));
+          return pickVisible(deepest.length ? deepest : pool);
         }
-        case 'css': return document.querySelector(c.value);
+        case 'css': return pickVisible(document.querySelectorAll(c.value));
         case 'href': {
           const v = String(c.value).replace(/"/g, '\\"');
-          return document.querySelector(`a[href="${v}"]`);
+          return pickVisible(document.querySelectorAll(`a[href="${v}"]`));
         }
         default: return null;
       }
@@ -770,6 +789,24 @@
     }
   }
 
+  // Sayfa sakinleşene kadar bekle (DOM değişikliği durana kadar), alt/üst sınırlarla
+  function waitForQuiet({ min, quiet, max }) {
+    return new Promise((resolve) => {
+      const started = Date.now();
+      let last = Date.now();
+      const obs = new MutationObserver(() => { last = Date.now(); });
+      try { obs.observe(document.documentElement, { childList: true, subtree: true, attributes: true, characterData: true }); } catch {}
+      const tick = setInterval(() => {
+        const now = Date.now();
+        if ((now - started >= min && now - last >= quiet) || now - started >= max) {
+          clearInterval(tick);
+          obs.disconnect();
+          resolve();
+        }
+      }, 200);
+    });
+  }
+
   // ---------- Tekrar bloğu ----------
   function matchingEnd(startIdx) {
     let depth = 0;
@@ -910,6 +947,15 @@
     // Tıklama navigasyona yol açtıysa bu script ölür; yeni sayfada player
     // yeniden yüklenir ve background'daki index'ten devam eder.
     await sleep(400);
+  }
+
+  // Son adımdan sonra pencere hemen kapatılırsa, o adımın başlattığı sunucu isteği
+  // (örn. onay penceresinde "Evet" → dosyayı bir sonraki aşamaya taşı) yarıda
+  // kesilir. Sayfa sakinleşene kadar beklenir: en az 2 sn, ardından 1,5 sn boyunca
+  // sayfada değişiklik olmayınca; en fazla 10 sn.
+  if (index >= steps.length) {
+    setBar('son adımın sonucu bekleniyor…');
+    await waitForQuiet({ min: 2000, quiet: 1500, max: 10000 });
   }
 
   setBar('tamamlandı, sonuçlar gönderiliyor…');
