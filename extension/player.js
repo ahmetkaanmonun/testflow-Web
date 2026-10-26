@@ -56,14 +56,46 @@
     return arr.find(reallyVisible) || arr[0] || null;
   }
 
-  function findByCandidate(c) {
+  // Kayıtta yakalanan etiket (butonun metni, alanın label'ı) — belirsiz locator'ları ayırt etmek için
+  function stepLabel(step) {
+    try { return JSON.parse(step.meta || '{}').label || null; } catch { return null; }
+  }
+
+  const normText = (t) => String(t || '').toLocaleLowerCase('tr-TR').replace(/\s+/g, ' ').trim();
+
+  // Elemanın kullanıcıya görünen adı kayıttaki etiketle uyuşuyor mu?
+  function labelMatches(el, label) {
+    const want = normText(label);
+    if (!want) return false;
+    const texts = [el.innerText, el.value, el.getAttribute('aria-label'), el.getAttribute('title'), el.placeholder];
+    // Form alanlarında ad, alana bağlı <label> etiketinde yazar
+    if (['INPUT', 'SELECT', 'TEXTAREA'].includes(el.tagName)) {
+      if (el.id) texts.push(document.querySelector(`label[for="${CSS.escape(el.id)}"]`)?.innerText);
+      texts.push(el.closest('label')?.innerText);
+    }
+    return texts.map(normText).filter(Boolean).some((t) => t === want || t.includes(want));
+  }
+
+
+  // Locator birden fazla elemana uyuyorsa (örn. aynı name="action" taşıyan Evet/Hayır
+  // butonları) kayıttaki etiketle ayırt edilir. Etiketle eşleşen yoksa locator bu
+  // sayfada belirsizdir: null dönülür ve sıradaki aday denenir. Önceden ilk eşleşme
+  // seçiliyordu — tıklama "yapılıyor" ama yanlış butona yapılıyordu.
+  function choose(list, hint) {
+    const arr = [...list];
+    if (arr.length <= 1 || !hint) return pickVisible(arr);
+    const byLabel = arr.filter((el) => labelMatches(el, hint));
+    return byLabel.length ? pickVisible(byLabel) : null;
+  }
+
+  function findByCandidate(c, hint = null) {
     try {
       switch (c.strategy) {
         case 'id': return document.getElementById(c.value);
-        case 'data-testid': return pickVisible(document.querySelectorAll(`[data-testid="${CSS.escape(c.value)}"]`));
-        case 'name': return pickVisible(document.querySelectorAll(`[name="${CSS.escape(c.value)}"]`));
-        case 'aria-label': return pickVisible(document.querySelectorAll(`[aria-label="${CSS.escape(c.value)}"]`));
-        case 'placeholder': return pickVisible(document.querySelectorAll(`[placeholder="${CSS.escape(c.value)}"]`));
+        case 'data-testid': return choose(document.querySelectorAll(`[data-testid="${CSS.escape(c.value)}"]`), hint);
+        case 'name': return choose(document.querySelectorAll(`[name="${CSS.escape(c.value)}"]`), hint);
+        case 'aria-label': return choose(document.querySelectorAll(`[aria-label="${CSS.escape(c.value)}"]`), hint);
+        case 'placeholder': return choose(document.querySelectorAll(`[placeholder="${CSS.escape(c.value)}"]`), hint);
         case 'text': {
           const nodes = [...document.querySelectorAll('button, a, label, span, div, [role="button"]')]
             .filter((n) => (n.innerText || '').trim().slice(0, 60) === c.value);
@@ -77,10 +109,10 @@
           const deepest = pool.filter((n) => !pool.some((m) => m !== n && n.contains(m)));
           return pickVisible(deepest.length ? deepest : pool);
         }
-        case 'css': return pickVisible(document.querySelectorAll(c.value));
+        case 'css': return choose(document.querySelectorAll(c.value), hint);
         case 'href': {
           const v = String(c.value).replace(/"/g, '\\"');
-          return pickVisible(document.querySelectorAll(`a[href="${v}"]`));
+          return choose(document.querySelectorAll(`a[href="${v}"]`), hint);
         }
         default: return null;
       }
@@ -134,13 +166,13 @@
   // Adayları skorla dener; 5sn boyunca 250ms'de bir yeniden dener (sayfa yükleniyor olabilir).
   // validate: bulunan elemanın adım için uygunluğunu doğrular (yanlış elemana
   // "iyileşme" adı altında işlem yapılmasını engeller).
-  async function findElement(candidates, validate, timeoutMs = 5000, waitFor = 'visible', action = null) {
+  async function findElement(candidates, validate, timeoutMs = 5000, waitFor = 'visible', action = null, hint = null) {
     const sorted = [...candidates].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
     const deadline = Date.now() + timeoutMs;
     let seenNotReady = false; // element var ama koşul sağlanmadı (hata mesajı için)
     while (Date.now() < deadline) {
       for (let i = 0; i < sorted.length; i++) {
-        const el = findByCandidate(sorted[i]);
+        const el = findByCandidate(sorted[i], hint);
         if (!el || (validate && !validate(el))) continue;
         if (isReady(el, waitFor, action)) {
           return { el, usedIndex: i, strategy: sorted[i].strategy };
@@ -607,7 +639,7 @@
     const { timeoutMs, waitFor } = resolveWait(step, optional);
     const found = opts.overrideEl
       ? { el: opts.overrideEl, usedIndex: 0, strategy: 'satır' } // tekrar bloğu: o turun satırındaki hedef
-      : await findElement(candidates, validatorFor(step), timeoutMs, waitFor, step.action);
+      : await findElement(candidates, validatorFor(step), timeoutMs, waitFor, step.action, stepLabel(step));
     if (found.notFound) {
       const why = found.seenNotReady
         ? (waitFor === 'enabled' ? 'tıklanabilir hale gelmedi (pasif veya üstü başka bir katmanla kapalı)'
@@ -765,7 +797,7 @@
             return r;
           }
           await sleep(400);
-          const again = await findElement(candidates, validatorFor(step), 600, waitFor, step.action);
+          const again = await findElement(candidates, validatorFor(step), 600, waitFor, step.action, stepLabel(step));
           if (!again.notFound) {
             lastActual = (again.el.innerText || again.el.value || '').trim();
             lastHealed = again.usedIndex > 0;
@@ -844,7 +876,7 @@
     // Satırları, ilk adımın (kayıttaki ilk satır) elementinden yola çıkarak bul
     const locate = async () => {
       const { timeoutMs } = resolveWait(first, false);
-      const f = await findElement(JSON.parse(first.candidates), validatorFor(first), timeoutMs, 'visible', first.action);
+      const f = await findElement(JSON.parse(first.candidates), validatorFor(first), timeoutMs, 'visible', first.action, stepLabel(first));
       return f.notFound ? null : discoverRows(f.el);
     };
     const info0 = await locate();
