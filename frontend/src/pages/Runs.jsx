@@ -52,7 +52,8 @@ export default function Runs() {
     if (!src) return null;
     let pre = null;
     try { pre = (typeof src.meta === 'string' ? JSON.parse(src.meta) : src.meta)?.precondition || null; } catch {}
-    return { text: describeStep(src), detail: technicalDetail(src), precondition: pre };
+    return { text: describeStep(src), detail: technicalDetail(src), precondition: pre,
+             iteration: src.iteration ? `${src.iteration}/${src.iterations}` : null };
   };
 
   const load = () =>
@@ -294,6 +295,11 @@ export default function Runs() {
                   <td>
                     {label ? (
                       <>
+                        {label.iteration && (
+                          <div className="muted" style={{ fontSize: 11, marginBottom: 2 }}>
+                            🔁 Satır {label.iteration}
+                          </div>
+                        )}
                         {label.precondition && (
                           <div className="muted" style={{ fontSize: 11, marginBottom: 2 }}>
                             Önkoşul: {label.precondition.scenarioName}

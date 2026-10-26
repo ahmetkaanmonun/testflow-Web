@@ -141,6 +141,16 @@ export function autoDescribe(step) {
       else if (t.mode === 'binding') parts.push(`metin alanlarına test verisindeki '${n.bindingKey || '?'}' değerini yaz`);
       return parts.length ? `Formdaki ${parts.join(' ve ')}` : 'Formu toplu doldur (ayar yapılmamış)';
     }
+    case 'repeat-start': {
+      const r = meta.repeat || {};
+      const extra = [
+        parseInt(r.skip, 10) > 0 ? `ilk ${parseInt(r.skip, 10)} satırı atla` : null,
+        parseInt(r.max, 10) > 0 ? `en fazla ${parseInt(r.max, 10)} satır` : null,
+      ].filter(Boolean);
+      return `Listedeki her satır için aşağıdaki adımları tekrarla${extra.length ? ` (${extra.join(', ')})` : ''}`;
+    }
+    case 'repeat-end':
+      return 'Tekrar bloğunun sonu';
     case 'script': {
       const first = String(n.value || '').split('\n').map((l) => l.trim()).find((l) => l && !l.startsWith('//')) || '';
       return first ? `Özel script çalıştır: ${clip(first, 40)}` : 'Özel script çalıştır';

@@ -4,7 +4,7 @@ import { api, getUser } from '../lib/api';
 import { describeStep, autoDescribe } from '../lib/describe';
 import { prepareRun, saveRun, postStartRun, postStartRecordFrom, resolveTimeout, isPreconditionResult } from '../lib/run';
 
-const ACTIONS = ['goto', 'click', 'fill', 'select', 'upload', 'press', 'assert-text', 'assert-visible', 'wait', 'fill-form', 'script'];
+const ACTIONS = ['goto', 'click', 'fill', 'select', 'upload', 'press', 'assert-text', 'assert-visible', 'wait', 'fill-form', 'script', 'repeat-start', 'repeat-end'];
 
 // Her aksiyonun değer ihtiyacı: null = değer kullanmaz (click, assert-visible).
 // binding: test verisine bağlanabilir; sensitive: "gizli" seçeneği anlamlı;
@@ -22,6 +22,8 @@ const VALUE_CONFIG = {
   // Kendi ayar paneli olan adımlar (kartın altında)
   'fill-form': { panel: true },
   script: { panel: true },
+  'repeat-start': { panel: true },
+  'repeat-end': null,
 };
 
 const DEFAULT_FORM = { choice: { mode: 'label', value: '' }, text: { mode: 'random' }, onlyEmpty: true };
@@ -63,6 +65,8 @@ export default function ScenarioDetail() {
   const [waitStats, setWaitStats] = useState({}); // stepId -> { avgWaitMs, maxWaitMs, samples }
   // Araya ekleme
   const [insertMenu, setInsertMenu] = useState(null);   // menüsü açık ekleme noktası (afterIndex)
+  const [repeatPanel, setRepeatPanel] = useState(null);  // tekrar bloğu ekleme paneli açık nokta
+  const [repeatCount, setRepeatCount] = useState('2');
   const [recordPanel, setRecordPanel] = useState(null); // kayıtla ekleme paneli açık nokta
   const [recEnv, setRecEnv] = useState('');
   const [recDataSet, setRecDataSet] = useState('');
@@ -195,6 +199,22 @@ export default function ScenarioDetail() {
     setInsertState({ kind: 'added', batch, count: newSteps.length, at: afterIndex + 2 });
   };
 
+  // afterIndex'ten sonraki `count` adımı tekrar bloğuyla sarar
+  const wrapInRepeat = (afterIndex, count) => {
+    insertBatch.current += 1;
+    const batch = insertBatch.current;
+    setSteps((prev) => {
+      const next = [...prev];
+      const n = Math.max(1, Math.min(count, next.length - (afterIndex + 1)));
+      next.splice(afterIndex + 1 + n, 0, { ...blankStep('repeat-end'), _batch: batch });
+      next.splice(afterIndex + 1, 0, { ...blankStep('repeat-start'), meta: JSON.stringify({ repeat: {} }), _batch: batch });
+      return next.map((st, idx) => ({ ...st, orderIndex: idx }));
+    });
+    setInsertMenu(null);
+    setRepeatPanel(null);
+    setInsertState({ kind: 'added', batch, count: 2, at: afterIndex + 2 });
+  };
+
   const undoInsert = (batch) => {
     setSteps((prev) => prev.filter((st) => st._batch !== batch).map((st, idx) => ({ ...st, orderIndex: idx })));
     setInsertState(null);
@@ -207,7 +227,9 @@ export default function ScenarioDetail() {
   // Kayıtla ekle: 1..afterIndex+1 adımlarını oynat, sonra aynı pencerede kayda geç
   const startRecordFrom = async (afterIndex) => {
     setError('');
-    const prefix = steps.slice(0, afterIndex + 1);
+    // Tekrar blokları kayıt öncesi oynatmada tek tur (ilk satır) olarak çalışır: hem hızlıdır
+    // hem de ekleme noktası bir bloğun içindeyse bloğun sonu oynatılan kısmın dışında kalmaz.
+    const prefix = steps.slice(0, afterIndex + 1).filter((st) => !['repeat-start', 'repeat-end'].includes(st.action));
     const environment = environments.find((en) => en.id === recEnv) || null;
     const dataSet = recDataSet ? dataSets.find((d) => d.id === recDataSet) : null;
     try {
@@ -399,6 +421,34 @@ export default function ScenarioDetail() {
         </div>
       );
     }
+    if (repeatPanel === afterIndex) {
+      const remaining = steps.length - (afterIndex + 1);
+      const n = Math.max(1, Math.min(parseInt(repeatCount, 10) || 1, remaining));
+      const firstStep = steps[afterIndex + 1];
+      const firstOk = firstStep && firstStep.action === 'click' && JSON.parse(firstStep.candidates || '[]').length > 0;
+      return (
+        <div className="card" style={{ margin: '4px 0 10px 34px', padding: 12, borderStyle: 'dashed' }}>
+          <div style={{ fontSize: 13, marginBottom: 8 }}>
+            {afterIndex + 2}. adımdan başlayan kaç adım her satır için tekrarlansın?
+            Bloğun ilk adımı ({describeStep(firstStep)}) hangi satırların işleneceğini belirler:
+            TestFlow o elemana benzeyen tüm satırları bulur ve her biri için adımları sırayla çalıştırır.
+          </div>
+          <div className="row" style={{ gap: 8 }}>
+            <input value={repeatCount} onChange={(e) => setRepeatCount(e.target.value)} inputMode="numeric" style={{ width: 70 }} />
+            <span className="muted" style={{ fontSize: 13 }}>
+              adım: {afterIndex + 2}–{afterIndex + 1 + n}. adımlar
+            </span>
+            <button onClick={() => wrapInRepeat(afterIndex, n)} disabled={!firstOk}>🔁 Tekrar bloğu oluştur</button>
+            <button className="ghost" onClick={() => setRepeatPanel(null)}>Vazgeç</button>
+          </div>
+          {!firstOk && (
+            <div style={{ fontSize: 12, marginTop: 6, color: 'var(--yellow)' }}>
+              Bloğun ilk adımı, kayıtta ilk satıra tıkladığınız bir click adımı olmalı.
+            </div>
+          )}
+        </div>
+      );
+    }
     if (insertMenu === afterIndex) {
       return (
         <div className="row" style={{ margin: '2px 0 10px 34px', gap: 6, flexWrap: 'wrap' }}>
@@ -418,6 +468,12 @@ export default function ScenarioDetail() {
                   onClick={() => insertSteps(afterIndex, [blankStep('script', '')])}>
             ⌨ Script
           </button>
+          {afterIndex + 1 < steps.length && (
+            <button className="ghost" title="Sonraki adımları listedeki her satır için tekrarla"
+                    onClick={() => { setRepeatPanel(afterIndex); setInsertMenu(null); }}>
+              🔁 Buradan itibaren tekrarla
+            </button>
+          )}
           <button className="ghost" onClick={() => insertSteps(afterIndex, [blankStep('click')])}
                   title="Locator'sız boş adım — genelde kayıtla eklemek daha doğrudur">
             Boş adım
@@ -700,6 +756,13 @@ export default function ScenarioDetail() {
       {insertPoint(-1)}
       {steps.map((step, i) => {
         const binding = step.dataBinding ? JSON.parse(step.dataBinding) : null;
+        // Tekrar bloğu içindeki adımlar girintili gösterilir
+        let depth = 0;
+        for (let j = 0; j < i; j++) {
+          if (steps[j].action === 'repeat-start') depth++;
+          if (steps[j].action === 'repeat-end') depth = Math.max(0, depth - 1);
+        }
+        if (step.action === 'repeat-end') depth = Math.max(0, depth - 1);
         let firstCandidate = null;
         try {
           const cands = JSON.parse(step.candidates || '[]');
@@ -709,6 +772,8 @@ export default function ScenarioDetail() {
           <div key={step.id || `new-${i}`}>
           <div className="card" style={{
             marginBottom: 10, padding: 14,
+            ...(depth > 0 ? { marginLeft: depth * 28, borderLeft: '4px solid var(--accent)' } : {}),
+            ...(['repeat-start', 'repeat-end'].includes(step.action) ? { background: 'var(--accent-soft)' } : {}),
             ...(step._batch ? { borderColor: 'var(--accent)', boxShadow: '0 0 0 1px var(--accent)' } : {}),
           }}>
             <div className="row" style={{ marginBottom: 10, alignItems: 'flex-start' }}>
@@ -901,6 +966,32 @@ export default function ScenarioDetail() {
               );
             })()}
 
+            {step.action === 'repeat-start' && (() => {
+              let meta = {};
+              try { meta = JSON.parse(step.meta || '{}'); } catch {}
+              const rep = meta.repeat || {};
+              const setRep = (patch) => updateMeta(i, 'repeat', { ...rep, ...patch });
+              const small = { fontSize: 13, padding: '4px 8px', width: 70 };
+              return (
+                <div style={{ marginTop: 10, marginLeft: 34, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div className="row" style={{ gap: 8, flexWrap: 'wrap', fontSize: 13 }}>
+                    <span>İlk</span>
+                    <input value={rep.skip ?? ''} placeholder="0" inputMode="numeric" style={small}
+                           onChange={(e) => setRep({ skip: e.target.value })} />
+                    <span>satırı atla, en fazla</span>
+                    <input value={rep.max ?? ''} placeholder="tümü" inputMode="numeric" style={small}
+                           onChange={(e) => setRep({ max: e.target.value })} />
+                    <span>satır işle</span>
+                  </div>
+                  <span className="muted" style={{ fontSize: 12 }}>
+                    Bloğun ilk adımındaki elemana benzeyen satırlar her koşumda yeniden sayılır. Blok içindeki adımlar
+                    aynı sayfada kalmalı (modal, panel gibi); sayfa değiştiren bir adım döngüyü durdurur.
+                    Raporda her satırın sonucu ayrı görünür.
+                  </span>
+                </div>
+              );
+            })()}
+
             {step.action === 'script' && (
               <div style={{ marginTop: 10, marginLeft: 34, display: 'flex', flexDirection: 'column', gap: 6 }}>
                 <textarea value={step.value ?? ''} rows={7} spellCheck={false}
@@ -918,7 +1009,7 @@ export default function ScenarioDetail() {
             {(() => {
               let meta = {};
               try { meta = JSON.parse(step.meta || '{}'); } catch {}
-              const needsElement = !['wait', 'goto', 'fill-form', 'script'].includes(step.action);
+              const needsElement = !['wait', 'goto', 'fill-form', 'script', 'repeat-start', 'repeat-end'].includes(step.action);
               const stat = step.id ? waitStats[step.id] : null;
               const effectiveMs = meta.timeoutMs || (resolveTimeout({
                 scenario: { timeoutMs: scenarioTimeoutMs() }, project: projects.find((p) => p.active),

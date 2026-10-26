@@ -88,6 +88,15 @@ Senaryo detayında:
   test verisiyle doldurur. "Yalnız boş olanları doldur" açıkken önceden
   cevaplanmış sorulara dokunmaz. Raporda kaç soru işaretlendiği yazar; bir
   soruda istenen seçenek yoksa adım başarısız olur.
+- **🔁 Buradan itibaren tekrarla** — listedeki her satır için aynı işlemleri
+  yapmak üzere (örn. her satıra tıkla, açılan modalda "tümünü işaretle", kaydet).
+  Önce tek bir turu normal şekilde kaydedin (ilk satıra tıklayıp modalı
+  tamamlayın). Sonra ilk satır tıklamasının önündeki ＋ menüsünden bu seçeneği
+  seçip kaç adımın tekrarlanacağını girin. Bloğun ilk adımı hangi satırların
+  işleneceğini belirler: TestFlow o elemana benzeyen tüm satırları her koşumda
+  yeniden sayar. Bloğun ayarlarında ilk N satırı atlayabilir ya da işlenecek
+  satır sayısını sınırlayabilirsiniz. Blok içindeki adımlar aynı sayfada
+  kalmalıdır; raporda her satırın sonucu ayrı, "Satır 3/15" şeklinde görünür.
 - **⌨ Script** — kalıba uymayan durumlar için. Yazdığınız JavaScript sayfada,
   tarayıcı konsolundaki gibi çalışır (`await` kullanılabilir, veri setine
   `testData.anahtar` ile erişilir). Hata fırlatır ya da `false` döndürürse

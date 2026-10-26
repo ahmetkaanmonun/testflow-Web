@@ -210,10 +210,11 @@
     return JSON.stringify({
       action: step.action,
       target,
-      value: hideValue ? null : (step.value ?? null),
+      value: hideValue ? null : (step.value == null ? null : String(step.value).slice(0, 500)),
       dataBindingKey: bindingKey,
       sensitive: !!step.sensitive,
       meta,
+      ...(loopCtx ? { iteration: loopCtx.iteration, iterations: loopCtx.total } : {}),
     });
   }
 
@@ -251,9 +252,15 @@
   // bulundu (bekleme bitti), finishedAt = sonuç raporlandı. Click/press sonucu
   // aksiyondan ÖNCE raporlandığı için onlarda finishedAt aksiyon anıdır.
   let timing = { startedAt: null, locatedAt: null };
+  // Tekrar bloğu içindeyken { iteration (1'den), total } — rapor ve snapshot'a yazılır
+  let loopCtx = null;
 
   // reportResult: sonucu background'a yazar (index ilerler)
   async function reportResult(stepIndex, step, result) {
+    // Tekrar bloğu içindeki başarısızlıkta hangi satırda olduğu mesajın başına yazılır
+    if (loopCtx && result.status !== 'passed' && result.errorMessage && !result.errorMessage.startsWith('Not: ')) {
+      result = { ...result, errorMessage: `${loopCtx.iteration}. satırda: ${result.errorMessage}` };
+    }
     await chrome.runtime.sendMessage({
       type: 'STEP_RESULT',
       result: {
@@ -433,6 +440,66 @@
     return { status: 'passed', healed: false, screenshot: await captureScreenshot(), errorMessage: `Not: ${summary}.` };
   }
 
+  // ---------- Tekrar bloğu: satır bulma ----------
+  // Durum sınıfları (seçili, tek/çift satır…) satırlar arasında farklılaşır; otomatik
+  // üretilen sınıflar her derlemede değişir. İkisi de benzerlik karşılaştırmasında yok sayılır.
+  const STATE_CLASS = /(^|[-_])(active|selected|hover|focus|focused|odd|even|open|opened|expanded|collapsed|checked|current|highlight|highlighted|disabled)($|[-_])|^(is|has)-/i;
+  const HASHY_CLASS = /^(css|sc|jss|emotion)-|[a-z]*\d[a-z0-9]{4,}$|__[A-Za-z0-9]{5,}$/;
+  const stableClasses = (el) => [...el.classList].filter((c) => !STATE_CLASS.test(c) && !HASHY_CLASS.test(c));
+
+  function similarTo(ref) {
+    const cls = stableClasses(ref);
+    return (el) => el.tagName === ref.tagName &&
+      cls.every((c) => el.classList.contains(c)) &&
+      Math.abs(el.childElementCount - ref.childElementCount) <= 1;
+  }
+
+  // Kardeşler alt alta mı dizili (satır) yoksa yan yana mı (hücre/sütun)?
+  function stackedVertically(els) {
+    const tops = new Set(els.map((e) => Math.round(e.getBoundingClientRect().top)));
+    return tops.size >= Math.min(els.length, 2) && tops.size > els.length / 2;
+  }
+
+  // anchor: kayıtta ilk satırda tıklanan element. Dönen: { rows, rowEl, path }
+  function discoverRows(anchor) {
+    const candidatesUp = [];
+    // Açık satır yapıları öncelikli: tablo satırı, ARIA satırı, liste elemanı
+    for (const sel of ['tr', '[role="row"]', 'li']) {
+      const r = anchor.closest(sel);
+      if (r && !candidatesUp.includes(r)) candidatesUp.push(r);
+    }
+    for (let cur = anchor; cur && cur.parentElement && cur !== document.body; cur = cur.parentElement) {
+      if (!candidatesUp.includes(cur)) candidatesUp.push(cur);
+    }
+    for (const rowEl of candidatesUp) {
+      const parent = rowEl.parentElement;
+      if (!parent) continue;
+      const rows = [...parent.children].filter((x) => similarTo(rowEl)(x) && isVisible(x));
+      if (rows.length >= 2 && (rowEl.tagName === 'TR' || rowEl.getAttribute('role') === 'row' || stackedVertically(rows))) {
+        // satırdan hedefe giden yol (çocuk sırası + etiket) — diğer satırlarda aynı hedefi bulmak için
+        const path = [];
+        for (let n = anchor; n !== rowEl; n = n.parentElement) {
+          path.unshift({ idx: [...n.parentElement.children].indexOf(n), tag: n.tagName });
+        }
+        return { rows, rowEl, path, anchorTag: anchor.tagName, anchorClasses: stableClasses(anchor) };
+      }
+    }
+    return null;
+  }
+
+  function targetInRow(row, info) {
+    let n = row;
+    for (const p of info.path) {
+      const next = n.children[p.idx];
+      if (!next || next.tagName !== p.tag) { n = null; break; }
+      n = next;
+    }
+    if (n) return n;
+    // Yapı küçük farklılık gösteriyorsa: satır içinde aynı tür ve sınıftaki ilk element
+    const sel = info.anchorTag.toLowerCase() + info.anchorClasses.map((c) => '.' + CSS.escape(c)).join('');
+    return row.querySelector(sel) || row;
+  }
+
   async function captureScreenshot() {
     try {
       const res = await chrome.runtime.sendMessage({ type: 'CAPTURE' });
@@ -440,7 +507,7 @@
     } catch { return null; }
   }
 
-  async function executeStep(step, stepIndex) {
+  async function executeStep(step, stepIndex, opts = {}) {
     timing = { startedAt: Date.now(), locatedAt: null };
     // Opsiyonel adım: başarısızlık koşumu kesmez, 'skipped' olarak geçilir
     // (bazı kayıtlarda alan dolu/kilitli gelir veya hiç görünmez).
@@ -519,7 +586,9 @@
 
     const candidates = JSON.parse(step.candidates || '[]');
     const { timeoutMs, waitFor } = resolveWait(step, optional);
-    const found = await findElement(candidates, validatorFor(step), timeoutMs, waitFor, step.action);
+    const found = opts.overrideEl
+      ? { el: opts.overrideEl, usedIndex: 0, strategy: 'satır' } // tekrar bloğu: o turun satırındaki hedef
+      : await findElement(candidates, validatorFor(step), timeoutMs, waitFor, step.action);
     if (found.notFound) {
       const why = found.seenNotReady
         ? (waitFor === 'enabled' ? 'tıklanabilir hale gelmedi (pasif veya üstü başka bir katmanla kapalı)'
@@ -701,9 +770,127 @@
     }
   }
 
+  // ---------- Tekrar bloğu ----------
+  function matchingEnd(startIdx) {
+    let depth = 0;
+    for (let j = startIdx + 1; j < steps.length; j++) {
+      if (steps[j].action === 'repeat-start') depth++;
+      if (steps[j].action === 'repeat-end') { if (depth === 0) return j; depth--; }
+    }
+    return -1;
+  }
+
+  // Döngü sonucunu döner: { status } — failed ise koşum durur
+  async function runRepeat(startIdx) {
+    const start = steps[startIdx];
+    timing = { startedAt: Date.now(), locatedAt: null };
+    const endIdx = matchingEnd(startIdx);
+    const fail = async (msg, at = startIdx) => {
+      const r = { status: 'failed', healed: false, errorMessage: msg, screenshot: await captureScreenshot() };
+      await reportResult(at, steps[at], r);
+      return { status: 'failed', endIdx: endIdx < 0 ? steps.length - 1 : endIdx, failedAt: at };
+    };
+    if (endIdx < 0) return fail('Tekrar bloğunun sonu yok — bloğu bitiren "repeat-end" adımını ekleyin.');
+    const body = [];
+    for (let j = startIdx + 1; j < endIdx; j++) body.push(j);
+    const first = steps[body[0]];
+    if (!first || !JSON.parse(first.candidates || '[]').length) {
+      return fail('Tekrar bloğunun ilk adımı, ilk satırda tıklanan bir element olmalı (kayıtla eklenmiş bir click adımı).');
+    }
+    if (body.some((j) => steps[j].action === 'repeat-start')) return fail('İç içe tekrar blokları henüz desteklenmiyor.');
+
+    let cfg = {};
+    try { cfg = JSON.parse(start.meta || '{}').repeat || {}; } catch {}
+    const skip = Math.max(parseInt(cfg.skip, 10) || 0, 0);
+    const max = parseInt(cfg.max, 10) > 0 ? parseInt(cfg.max, 10) : Infinity;
+
+    // Satırları, ilk adımın (kayıttaki ilk satır) elementinden yola çıkarak bul
+    const locate = async () => {
+      const { timeoutMs } = resolveWait(first, false);
+      const f = await findElement(JSON.parse(first.candidates), validatorFor(first), timeoutMs, 'visible', first.action);
+      return f.notFound ? null : discoverRows(f.el);
+    };
+    const info0 = await locate();
+    timing.locatedAt = Date.now();
+    if (!info0) return fail(`${targetName(first)} bulunamadı ya da çevresinde tekrarlanan satır yapısı tespit edilemedi.`);
+    const total = Math.min(Math.max(info0.rows.length - skip, 0), max);
+    if (total === 0) return fail(`${info0.rows.length} satır bulundu, atlama ayarından sonra işlenecek satır kalmadı.`);
+    await reportResult(startIdx, start, { status: 'passed', healed: false,
+      errorMessage: `Not: ${info0.rows.length} satır bulundu, ${total} tanesi işlenecek.` });
+
+    for (let it = 0; it < total; it++) {
+      loopCtx = { iteration: it + 1, total };
+      setBar(`tekrar ${it + 1}/${total}`);
+      // Her turda satırlar yeniden bulunur: önceki işlem tabloyu yeniden çizmiş olabilir
+      const info = it === 0 ? info0 : await locate();
+      const row = info && info.rows[skip + it];
+      if (!row) {
+        const r = await fail(`${info ? info.rows.length : 0} satır kaldı; ${skip + it + 1}. satır artık yok (işlenen satırlar listeden kalkıyor olabilir).`, body[0]);
+        loopCtx = null;
+        return r;
+      }
+      row.scrollIntoView({ block: 'center' });
+      for (let k = 0; k < body.length; k++) {
+        const j = body[k];
+        setBar(`tekrar ${it + 1}/${total} — adım ${k + 1}/${body.length}: ${targetName(steps[j])}`);
+        const res = await executeStep(steps[j], j, k === 0 ? { overrideEl: targetInRow(row, info) } : {});
+        if (res.status === 'failed') { loopCtx = null; return { status: 'failed', endIdx, failedAt: j }; }
+        await sleep(400);
+      }
+    }
+    loopCtx = null;
+    timing = { startedAt: Date.now(), locatedAt: null };
+    await reportResult(endIdx, steps[endIdx], { status: 'passed', healed: false, errorMessage: `Not: ${total} satır işlendi.` });
+    return { status: 'passed', endIdx };
+  }
+
+  async function skipRest(from) {
+    for (let j = from; j < steps.length; j++) {
+      await chrome.runtime.sendMessage({
+        type: 'STEP_RESULT',
+        result: { ...resultBase(j, steps[j]), status: 'skipped', healed: false },
+      });
+    }
+  }
+
+  // Tekrar bloğunun içindeki bir adım sayfa değiştirdiyse döngü durumu kaybolur:
+  // kaldığı yerden "düz" devam etmek yanlış olurdu, açıkça başarısız sayılır.
+  {
+    let open = -1;
+    for (let j = 0; j < index && j < steps.length; j++) {
+      if (steps[j].action === 'repeat-start') open = j;
+      if (steps[j].action === 'repeat-end') open = -1;
+    }
+    if (open >= 0 && index < steps.length) {
+      await reportResult(index, steps[index], { status: 'failed', healed: false,
+        errorMessage: 'Tekrar bloğunun içindeki bir adım sayfa değiştirdi. Tekrar blokları şu an aynı sayfada kalmalı (modal, panel gibi).' });
+      await skipRest(index + 1);
+      index = steps.length;
+    }
+  }
+
   // ---------- Ana döngü ----------
   while (index < steps.length) {
     const step = steps[index];
+
+    if (step.action === 'repeat-start') {
+      const res = await runRepeat(index);
+      if (res.status === 'failed') {
+        // Bloğun kalanı ve sonrası atlandı
+        const after = (res.failedAt ?? index) + 1;
+        await skipRest(after);
+        break;
+      }
+      index = res.endIdx + 1;
+      await sleep(400);
+      continue;
+    }
+    if (step.action === 'repeat-end') { // eşleşmeyen bitiş: zararsız, geç
+      await reportResult(index, step, { status: 'passed', healed: false });
+      index += 1;
+      continue;
+    }
+
     setBar(`adım ${index + 1}/${steps.length}: ${targetName(step)} (${step.action})`);
 
     const result = await executeStep(step, index); // sonuç executeStep içinde raporlanır
