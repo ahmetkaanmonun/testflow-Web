@@ -130,7 +130,7 @@ public class ScenarioController {
         AuthenticatedUser user = CurrentUser.from(req);
         Scenario s = new Scenario();
         s.setName(body.name());
-        s.setStartUrl(blankToNull(body.startUrl()));
+        s.setStartUrl(normalizeUrl(body.startUrl()));
         s.setFolderId(body.folderId());
         s.setTags(body.tags());
         s.setWorkspaceId(user.workspaceId());
@@ -151,7 +151,7 @@ public class ScenarioController {
         AuthenticatedUser user = CurrentUser.from(req);
         Scenario s = find(id, user);
         if (body.name() != null) s.setName(body.name());
-        if (body.startUrl() != null) s.setStartUrl(blankToNull(body.startUrl())); // "" → temizle
+        if (body.startUrl() != null) s.setStartUrl(normalizeUrl(body.startUrl())); // "" → temizle
         if (body.folderId() != null) s.setFolderId(body.folderId());
         if (body.tags() != null) s.setTags(body.tags());
         if (body.steps() != null) applySteps(s, body.steps());
@@ -167,8 +167,13 @@ public class ScenarioController {
         return toDetail(scenarios.save(s));
     }
 
-    private static String blankToNull(String v) {
-        return v == null || v.isBlank() ? null : v.trim();
+    /**
+     * Boş adres null değil "" olarak saklanır: start_url sütunu veritabanında NOT NULL
+     * tanımlı ve mevcut veritabanlarında ddl-auto=update bu kısıtı kaldırmaz.
+     * Arayüz "" değerini "adres yok, önkoşuldan devam et" olarak yorumlar.
+     */
+    private static String normalizeUrl(String v) {
+        return v == null || v.isBlank() ? "" : v.trim();
     }
 
     /**
@@ -178,7 +183,8 @@ public class ScenarioController {
      * Önkoşul yoksa başlanacak bir nokta gerekir.
      */
     private static void requireStartOrPrecondition(Scenario s) {
-        if (s.getStartUrl() == null && PreconditionService.parse(s.getPreconditionIds()).isEmpty()) {
+        boolean noUrl = s.getStartUrl() == null || s.getStartUrl().isBlank();
+        if (noUrl && PreconditionService.parse(s.getPreconditionIds()).isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "Önkoşulu olmayan senaryolarda başlangıç adresi gerekli.");
         }
