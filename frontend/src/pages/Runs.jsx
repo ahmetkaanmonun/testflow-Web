@@ -329,7 +329,13 @@ export default function Runs() {
                     ) : <span className="muted">—</span>}
                   </td>
                   <td>{s.healed ? `✓ (${s.healedStrategy ?? '-'})` : '—'}</td>
-                  <td className="muted">{s.errorMessage ?? '—'}</td>
+                  <td className="muted">
+                    {s.errorMessage
+                      ? (s.status === 'passed' && s.errorMessage.startsWith('Not: ')
+                          ? <span style={{ color: 'var(--muted)', fontStyle: 'italic' }}>{s.errorMessage.slice(5)}</span>
+                          : s.errorMessage)
+                      : '—'}
+                  </td>
                   <td>
                     {s.screenshot ? (
                       <img src={s.screenshot} alt={`adım ${s.orderIndex + 1}`}

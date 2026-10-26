@@ -4,7 +4,7 @@ import { api, getUser } from '../lib/api';
 import { describeStep, autoDescribe } from '../lib/describe';
 import { prepareRun, saveRun, postStartRun, postStartRecordFrom, resolveTimeout, isPreconditionResult } from '../lib/run';
 
-const ACTIONS = ['goto', 'click', 'fill', 'select', 'upload', 'press', 'assert-text', 'assert-visible', 'wait'];
+const ACTIONS = ['goto', 'click', 'fill', 'select', 'upload', 'press', 'assert-text', 'assert-visible', 'wait', 'fill-form', 'script'];
 
 // Her aksiyonun değer ihtiyacı: null = değer kullanmaz (click, assert-visible).
 // binding: test verisine bağlanabilir; sensitive: "gizli" seçeneği anlamlı;
@@ -19,7 +19,12 @@ const VALUE_CONFIG = {
   press: { placeholder: 'Tuş (örn. Enter)' },
   wait: { placeholder: 'Süre (saniye)' },
   goto: { placeholder: 'Adres (https://…)' },
+  // Kendi ayar paneli olan adımlar (kartın altında)
+  'fill-form': { panel: true },
+  script: { panel: true },
 };
+
+const DEFAULT_FORM = { choice: { mode: 'label', value: '' }, text: { mode: 'random' }, onlyEmpty: true };
 
 export default function ScenarioDetail() {
   const { id } = useParams();
@@ -405,6 +410,14 @@ export default function ScenarioDetail() {
           <button className="ghost" onClick={() => insertSteps(afterIndex, [blankStep('goto', startUrl || scenario.startUrl)])}>
             🌐 Adrese git
           </button>
+          <button className="ghost" title="Sayfadaki tüm sorularda bir seçeneği işaretle, metin alanlarını doldur"
+                  onClick={() => insertSteps(afterIndex, [{ ...blankStep('fill-form'), meta: JSON.stringify({ form: DEFAULT_FORM }) }])}>
+            📝 Formu toplu doldur
+          </button>
+          <button className="ghost" title="Sayfada konsoldaki gibi JavaScript çalıştır"
+                  onClick={() => insertSteps(afterIndex, [blankStep('script', '')])}>
+            ⌨ Script
+          </button>
           <button className="ghost" onClick={() => insertSteps(afterIndex, [blankStep('click')])}
                   title="Locator'sız boş adım — genelde kayıtla eklemek daha doğrudur">
             Boş adım
@@ -726,11 +739,15 @@ export default function ScenarioDetail() {
                         const cfg = VALUE_CONFIG[next];
                         // Değer kullanmayan aksiyona geçince bağlama/gizli temizlenir; yoksa
                         // koşumda "anahtar veri setinde yok" gibi anlamsız hatalar çıkabilirdi
+                        let meta = {};
+                        try { meta = JSON.parse(step.meta || '{}'); } catch {}
+                        if (next === 'fill-form' && !meta.form) meta.form = DEFAULT_FORM;
                         updateStep(i, {
                           action: next,
-                          ...(!cfg?.binding ? { dataBinding: null } : {}),
+                          meta: JSON.stringify(meta),
+                          ...(!cfg?.binding && next !== 'fill-form' ? { dataBinding: null } : {}),
                           ...(!cfg?.sensitive ? { sensitive: false } : {}),
-                          ...(!cfg ? { value: '' } : {}),
+                          ...(!cfg || next === 'fill-form' ? { value: '' } : {}),
                         });
                       }}
                       style={{ width: 150 }}>
@@ -741,6 +758,9 @@ export default function ScenarioDetail() {
                 const cfg = VALUE_CONFIG[step.action];
                 if (!cfg) {
                   return <span className="muted" style={{ flex: 1, fontSize: 13 }}>Bu adım değer gerektirmez</span>;
+                }
+                if (cfg.panel) {
+                  return <span className="muted" style={{ flex: 1, fontSize: 13 }}>Ayarlar aşağıda</span>;
                 }
                 return (
                   <>
@@ -819,10 +839,86 @@ export default function ScenarioDetail() {
               <button className="ghost" onClick={() => moveStep(i, 1)}>↓</button>
               <button className="danger" onClick={() => removeStep(i)}>✕</button>
             </div>
+            {step.action === 'fill-form' && (() => {
+              let meta = {};
+              try { meta = JSON.parse(step.meta || '{}'); } catch {}
+              const form = { ...DEFAULT_FORM, ...(meta.form || {}) };
+              const setForm = (patch) => updateMeta(i, 'form', { ...form, ...patch });
+              const small = { fontSize: 13, padding: '4px 8px' };
+              return (
+                <div style={{ marginTop: 10, marginLeft: 34, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{ width: 150, fontSize: 13 }}>Seçenekli sorular</span>
+                    <select value={form.choice.mode} style={{ ...small, width: 200 }}
+                            onChange={(e) => setForm({ choice: { ...form.choice, mode: e.target.value } })}>
+                      <option value="label">Etiketine göre seç</option>
+                      <option value="index">Sırasına göre seç</option>
+                      <option value="random">Rastgele seç</option>
+                      <option value="none">Dokunma</option>
+                    </select>
+                    {['label', 'index'].includes(form.choice.mode) && (
+                      <input value={form.choice.value ?? ''} style={{ ...small, width: 220 }}
+                             placeholder={form.choice.mode === 'label' ? 'örn. Evet' : 'örn. 1 (son seçenek: -1)'}
+                             onChange={(e) => setForm({ choice: { ...form.choice, value: e.target.value } })} />
+                    )}
+                  </div>
+                  <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{ width: 150, fontSize: 13 }}>Metin / yorum alanları</span>
+                    <select value={form.text.mode} style={{ ...small, width: 200 }}
+                            onChange={(e) => {
+                              const mode = e.target.value;
+                              setForm({ text: { mode } });
+                              if (mode !== 'binding') updateStep(i, { dataBinding: null });
+                            }}>
+                      <option value="random">Rastgele metin</option>
+                      <option value="fixed">Sabit değer</option>
+                      <option value="binding">Test verisinden</option>
+                      <option value="none">Dokunma</option>
+                    </select>
+                    {form.text.mode === 'fixed' && (
+                      <input value={step.value ?? ''} placeholder="Yazılacak değer" style={{ ...small, width: 220 }}
+                             onChange={(e) => updateStep(i, { value: e.target.value })} />
+                    )}
+                    {form.text.mode === 'binding' && (
+                      <select value={binding ? binding.dataSetKey : ''} style={{ ...small, width: 220 }}
+                              onChange={(e) => updateStep(i, {
+                                dataBinding: e.target.value ? JSON.stringify({ dataSetKey: e.target.value }) : null,
+                              })}>
+                        <option value="">Anahtar seçin…</option>
+                        {keysFor('fill').map((k) => <option key={k} value={k}>📎 {k}</option>)}
+                      </select>
+                    )}
+                  </div>
+                  <label className="row muted" style={{ fontSize: 12, gap: 6 }}>
+                    <input type="checkbox" checked={form.onlyEmpty !== false} style={{ width: 'auto' }}
+                           onChange={(e) => setForm({ onlyEmpty: e.target.checked })} />
+                    Yalnız boş olanları doldur (önceden cevaplanmış soru ve dolu alanlara dokunma)
+                  </label>
+                  {form.choice.mode === 'label' && !String(form.choice.value || '').trim() && (
+                    <span style={{ fontSize: 12, color: 'var(--yellow)' }}>Seçilecek seçeneğin etiketini yazın (örn. Evet).</span>
+                  )}
+                </div>
+              );
+            })()}
+
+            {step.action === 'script' && (
+              <div style={{ marginTop: 10, marginLeft: 34, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <textarea value={step.value ?? ''} rows={7} spellCheck={false}
+                          onChange={(e) => updateStep(i, { value: e.target.value })}
+                          placeholder={"// Sayfada konsoldaki gibi çalışır. Örnek:\ndocument.querySelectorAll('input[value=\"evet\"]').forEach((r) => r.click());\nreturn true;"}
+                          style={{ width: '100%', fontFamily: 'Consolas, Menlo, monospace', fontSize: 13, resize: 'vertical' }} />
+                <span className="muted" style={{ fontSize: 12 }}>
+                  Kod sayfanın içinde, tarayıcı konsolundaki gibi çalışır; <code>await</code> kullanılabilir.
+                  Test verisine <code>testData.anahtar</code> ile erişilir. Hata fırlatırsa ya da <code>false</code> döndürürse
+                  adım başarısız sayılır; döndürülen başka bir değer raporda not olarak görünür. Varsayılan süre sınırı 30 sn.
+                </span>
+              </div>
+            )}
+
             {(() => {
               let meta = {};
               try { meta = JSON.parse(step.meta || '{}'); } catch {}
-              const needsElement = !['wait', 'goto'].includes(step.action);
+              const needsElement = !['wait', 'goto', 'fill-form', 'script'].includes(step.action);
               const stat = step.id ? waitStats[step.id] : null;
               const effectiveMs = meta.timeoutMs || (resolveTimeout({
                 scenario: { timeoutMs: scenarioTimeoutMs() }, project: projects.find((p) => p.active),

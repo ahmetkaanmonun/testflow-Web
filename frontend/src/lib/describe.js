@@ -128,6 +128,23 @@ export function autoDescribe(step) {
       if (!label || clip(meta.label, 50) === clip(n.value, 50)) return `Sayfada ${expected} metninin göründüğünü doğrula`;
       return `'${label}' ${kind.gen} ${expected} metnini içerdiğini doğrula`;
     }
+    case 'fill-form': {
+      const f = meta.form || {};
+      const c = f.choice || {};
+      const t = f.text || {};
+      const parts = [];
+      if (c.mode === 'label' && c.value) parts.push(`tüm sorularda '${clip(c.value, 30)}' seçeneğini işaretle`);
+      else if (c.mode === 'index') parts.push(`tüm sorularda ${String(c.value) === '-1' ? 'son' : `${c.value || 1}.`} seçeneği işaretle`);
+      else if (c.mode === 'random') parts.push('tüm sorularda rastgele bir seçenek işaretle');
+      if (t.mode === 'random') parts.push('metin alanlarını rastgele metinle doldur');
+      else if (t.mode === 'fixed') parts.push(`metin alanlarına '${clip(n.value, 30)}' yaz`);
+      else if (t.mode === 'binding') parts.push(`metin alanlarına test verisindeki '${n.bindingKey || '?'}' değerini yaz`);
+      return parts.length ? `Formdaki ${parts.join(' ve ')}` : 'Formu toplu doldur (ayar yapılmamış)';
+    }
+    case 'script': {
+      const first = String(n.value || '').split('\n').map((l) => l.trim()).find((l) => l && !l.startsWith('//')) || '';
+      return first ? `Özel script çalıştır: ${clip(first, 40)}` : 'Özel script çalıştır';
+    }
     case 'assert-visible':
       return label ? `'${label}' ${kind.gen} göründüğünü doğrula` : 'Öğenin göründüğünü doğrula';
     default:

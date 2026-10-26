@@ -81,6 +81,20 @@ Senaryo detayında:
   kullanın ve **Kaydı Bitir**'e basın; adımlar seçtiğiniz yere eklenir.
   Önceki adımlardan biri geçmezse kayda geçilmez ve nedeni gösterilir.
 - **⏱ Bekleme** / **🌐 Adrese git** — element gerektirmeyen adımlar.
+- **📝 Formu toplu doldur** — anket gibi çok sorulu ekranlar için. Sayfadaki
+  tüm seçenekli sorularda (radyo düğmeleri, açılır listeler) bir seçeneği
+  işaretler: etiketine göre ("Evet"), sırasına göre (1, son için -1) ya da
+  rastgele. Metin/yorum alanlarını rastgele metinle, sabit bir değerle ya da
+  test verisiyle doldurur. "Yalnız boş olanları doldur" açıkken önceden
+  cevaplanmış sorulara dokunmaz. Raporda kaç soru işaretlendiği yazar; bir
+  soruda istenen seçenek yoksa adım başarısız olur.
+- **⌨ Script** — kalıba uymayan durumlar için. Yazdığınız JavaScript sayfada,
+  tarayıcı konsolundaki gibi çalışır (`await` kullanılabilir, veri setine
+  `testData.anahtar` ile erişilir). Hata fırlatır ya da `false` döndürürse
+  adım başarısız olur. Script adımları kendini onarmaz; mümkünse sonunda bir
+  kontrol yapıp sorun varsa hata fırlatın. Bazı sitelerin güvenlik politikası
+  (CSP) script çalıştırmayı engelleyebilir; bu durumda adım bunu söyleyerek
+  başarısız olur.
 
 Eklenen adımlar çerçeveli görünür; **Geri al** ile çıkarabilir, **Kaydet**
 ile kalıcı hale getirirsiniz.

@@ -12,6 +12,18 @@
   const { steps } = state;
   const runConfig = state.runConfig || {};
   let index = state.index;
+  // Önceki sayfada başlayan script adımı sayfa geçişi yaptı: o adım tamamlandı sayılır
+  if (state.pendingScript != null && state.pendingScript === index && steps[index]) {
+    let snap = null;
+    try { snap = JSON.stringify({ action: 'script', target: null, value: null, dataBindingKey: null, sensitive: false,
+                                  meta: JSON.parse(steps[index].meta || '{}') }); } catch {}
+    await chrome.runtime.sendMessage({
+      type: 'STEP_RESULT',
+      result: { orderIndex: index, stepId: steps[index].id ?? null, stepSnapshot: snap, status: 'passed', healed: false,
+                finishedAt: Date.now(), errorMessage: 'Not: script sayfa geçişi başlattı; adım tamamlandı sayıldı.' },
+    });
+    index += 1;
+  }
 
   // ---------- Koşum çubuğu ----------
   const barEl = document.createElement('div');
@@ -271,6 +283,156 @@
     return { timeoutMs: clamp(Math.round(base * factor)), waitFor };
   }
 
+  // ---------- Formu toplu doldur: yardımcılar ----------
+  const norm = (t) => String(t || '').toLocaleLowerCase('tr-TR').replace(/\s+/g, ' ').trim();
+
+  // Seçeneğin kullanıcıya görünen etiketi
+  function optionLabel(el) {
+    if (el.tagName === 'OPTION') return el.text || el.value || '';
+    if (el.id) {
+      const l = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+      if (l && l.innerText.trim()) return l.innerText.trim();
+    }
+    const wrap = el.closest('label');
+    if (wrap && wrap.innerText.trim()) return wrap.innerText.trim();
+    const aria = el.getAttribute('aria-label');
+    if (aria && aria.trim()) return aria.trim();
+    if (el.getAttribute('role') === 'radio' && el.innerText.trim()) return el.innerText.trim();
+    let n = el.nextSibling;
+    while (n && !String(n.textContent || '').trim()) n = n.nextSibling;
+    if (n && String(n.textContent || '').trim()) return String(n.textContent).trim().slice(0, 80);
+    return el.value || '';
+  }
+
+  // Görünür mü — özel tasarımlı radyolarda input gizlidir, etiketi görünür
+  function shownOrLabelShown(el) {
+    if (isVisible(el)) return true;
+    const lbl = el.closest('label') || (el.id && document.querySelector(`label[for="${CSS.escape(el.id)}"]`));
+    return !!(lbl && isVisible(lbl));
+  }
+
+  // Sayfadaki seçenekli sorular: [{ kind: 'radio'|'select', options: [el], el? }]
+  function collectQuestions() {
+    const out = [];
+    const byName = new Map();
+    for (const r of document.querySelectorAll('input[type="radio"]')) {
+      if (r.disabled || !shownOrLabelShown(r)) continue;
+      const key = r.name ? `name:${r.form ? 'f' : ''}${r.name}` : r;
+      if (!byName.has(key)) byName.set(key, []);
+      byName.get(key).push(r);
+    }
+    for (const opts of byName.values()) out.push({ kind: 'radio', options: opts });
+    const byGroup = new Map();
+    for (const r of document.querySelectorAll('[role="radio"]')) {
+      if (r.tagName === 'INPUT' || !isVisible(r) || r.getAttribute('aria-disabled') === 'true') continue;
+      const g = r.closest('[role="radiogroup"]') || r.parentElement;
+      if (!byGroup.has(g)) byGroup.set(g, []);
+      byGroup.get(g).push(r);
+    }
+    for (const opts of byGroup.values()) out.push({ kind: 'radio', options: opts });
+    for (const sel of document.querySelectorAll('select')) {
+      if (sel.disabled || sel.multiple) continue;
+      // select2 gibi bileşenler asıl select'i gizler; yanındaki görünür bileşen yeterli
+      const proxy = sel.nextElementSibling;
+      if (!isVisible(sel) && !(proxy && /select2|chosen/.test(proxy.className || '') && isVisible(proxy))) continue;
+      const options = [...sel.options].filter((o) => !o.disabled && o.value !== '');
+      if (options.length) out.push({ kind: 'select', el: sel, options });
+    }
+    return out;
+  }
+
+  function collectTextFields() {
+    return [...document.querySelectorAll('textarea, input:not([type]), input[type="text"]')]
+      .filter((el) => isVisible(el) && !el.disabled && !el.readOnly);
+  }
+
+  function pickOption(options, choice) {
+    if (choice.mode === 'random') return options[Math.floor(Math.random() * options.length)];
+    if (choice.mode === 'index') {
+      const n = parseInt(choice.value, 10) || 1;
+      return n > 0 ? options[n - 1] : options[options.length + n]; // -1 = son seçenek
+    }
+    const want = norm(choice.value);
+    if (!want) return null;
+    return options.find((o) => norm(optionLabel(o)) === want)
+        || options.find((o) => norm(optionLabel(o)).includes(want));
+  }
+
+  const isChosen = (o) => !!o.checked || o.getAttribute('aria-checked') === 'true' || !!o.selected;
+
+  function randomText() {
+    const words = ['Otomasyon', 'test', 'yorumu', 'örnek', 'değerlendirme', 'kontrol', 'notu'];
+    const pick = () => words[Math.floor(Math.random() * words.length)];
+    return `${pick()} ${pick()} ${Math.floor(1000 + Math.random() * 9000)}`;
+  }
+
+  async function fillForm(cfg, step, timeoutMs, failStatus, failPrefix) {
+    const choice = cfg.choice || { mode: 'none' };
+    const text = cfg.text || { mode: 'none' };
+    const onlyEmpty = cfg.onlyEmpty !== false;
+    // Sayfa yüklenirken alanlar geç gelebilir: en az bir hedef görünene kadar bekle
+    const deadline = Date.now() + timeoutMs;
+    let questions = [], fields = [];
+    while (Date.now() < deadline) {
+      questions = choice.mode !== 'none' ? collectQuestions() : [];
+      fields = text.mode !== 'none' ? collectTextFields() : [];
+      if (questions.length || fields.length) break;
+      await sleep(250);
+    }
+    timing.locatedAt = Date.now();
+    if (!questions.length && !fields.length) {
+      return { status: failStatus, healed: false, screenshot: await captureScreenshot(),
+               errorMessage: failPrefix + `${secs(timeoutMs)} sn içinde sayfada doldurulacak soru veya metin alanı bulunamadı.` };
+    }
+
+    let marked = 0, alreadySet = 0;
+    const unmatched = [];
+    for (const q of questions) {
+      if (onlyEmpty && q.options.some(isChosen) && !(q.kind === 'select' && q.el.selectedIndex <= 0)) { alreadySet++; continue; }
+      const opt = pickOption(q.options, choice);
+      if (!opt) { unmatched.push(q); continue; }
+      if (q.kind === 'select') {
+        setNativeValue(q.el, opt.value);
+      } else {
+        const target = isVisible(opt) ? opt
+          : (opt.closest('label') || (opt.id && document.querySelector(`label[for="${CSS.escape(opt.id)}"]`)) || opt);
+        target.scrollIntoView({ block: 'center' });
+        realisticClick(target);
+      }
+      marked++;
+      await sleep(60); // arayüz tepki versin (koşullu sorular, doğrulama)
+    }
+
+    let filled = 0;
+    if (text.mode !== 'none') {
+      // Seçim yapılınca yeni yorum alanları açılmış olabilir — yeniden topla
+      for (const f of collectTextFields()) {
+        if (onlyEmpty && String(f.value || '').trim()) continue;
+        const v = text.mode === 'random' ? randomText() : String(step.value ?? '');
+        if (!v) continue;
+        f.scrollIntoView({ block: 'center' });
+        try { f.focus(); } catch {}
+        setNativeValue(f, v);
+        f.dispatchEvent(new Event('blur', { bubbles: true }));
+        filled++;
+        await sleep(30);
+      }
+    }
+
+    const summary = [
+      choice.mode !== 'none' ? `${marked} soru işaretlendi` : null,
+      alreadySet ? `${alreadySet} soru zaten cevaplıydı` : null,
+      text.mode !== 'none' ? `${filled} metin alanı dolduruldu` : null,
+    ].filter(Boolean).join(', ');
+
+    if (unmatched.length) {
+      const what = choice.mode === 'index' ? `${choice.value}. seçenek` : `'${choice.value}' seçeneği`;
+      return { status: failStatus, healed: false, screenshot: await captureScreenshot(),
+               errorMessage: failPrefix + `${questions.length} sorudan ${unmatched.length} tanesinde ${what} bulunamadı. (${summary})` };
+    }
+    return { status: 'passed', healed: false, screenshot: await captureScreenshot(), errorMessage: `Not: ${summary}.` };
+  }
+
   async function captureScreenshot() {
     try {
       const res = await chrome.runtime.sendMessage({ type: 'CAPTURE' });
@@ -319,6 +481,38 @@
       const secs = Math.min(Math.max(parseFloat(step.value) || 1, 0.1), 60);
       await sleep(secs * 1000);
       const r = { status: 'passed', healed: false, healedStrategy: null };
+      await reportResult(stepIndex, step, r);
+      return r;
+    }
+
+    // ---------- Formu toplu doldur ----------
+    if (step.action === 'fill-form') {
+      let cfg = {};
+      try { cfg = JSON.parse(step.meta || '{}').form || {}; } catch {}
+      const r = await fillForm(cfg, step, resolveWait(step, optional).timeoutMs, failStatus, failPrefix);
+      await reportResult(stepIndex, step, r);
+      return r;
+    }
+
+    // ---------- Script çalıştır ----------
+    if (step.action === 'script') {
+      const code = String(step.value || '');
+      if (!code.trim()) {
+        const r = { status: failStatus, healed: false, errorMessage: failPrefix + 'Script boş.' };
+        await reportResult(stepIndex, step, r);
+        return r;
+      }
+      let own = 0;
+      try { own = Number(JSON.parse(step.meta || '{}').timeoutMs) || 0; } catch {}
+      await chrome.runtime.sendMessage({ type: 'SCRIPT_STARTED', index: stepIndex });
+      const res = await chrome.runtime.sendMessage({
+        type: 'EXEC_SCRIPT', code, testData: runConfig.testData || {}, timeoutMs: own > 0 ? Math.min(own, 300000) : 30000,
+      });
+      const r = res && res.ok
+        ? { status: 'passed', healed: false, screenshot: await captureScreenshot(),
+            ...(res.value != null && res.value !== 'true' ? { errorMessage: `Not: script sonucu: ${res.value}` } : {}) }
+        : { status: failStatus, healed: false, screenshot: await captureScreenshot(),
+            errorMessage: failPrefix + ((res && res.error) || 'Script false döndürdü.') };
       await reportResult(stepIndex, step, r);
       return r;
     }

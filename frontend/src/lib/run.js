@@ -103,9 +103,20 @@ export async function prepareRun({ scenario, environment = null, dataSet = null,
   return {
     startUrl: applyEnvironment(firstUrl, environment),
     steps: resolveBindings(combined, dataSet),
-    runConfig: { defaultTimeoutMs: resolveTimeout({ scenario, environment, project }).ms },
+    runConfig: {
+      defaultTimeoutMs: resolveTimeout({ scenario, environment, project }).ms,
+      // Script adımları testData.anahtar ile veri setine erişir (yalnız metin değerler)
+      testData: testDataMap(dataSet),
+    },
     preconditionCount: combined.length - (scenario.steps || []).length,
   };
+}
+
+function testDataMap(dataSet) {
+  if (!dataSet) return {};
+  let entries = [];
+  try { entries = JSON.parse(dataSet.entries); } catch { return {}; }
+  return Object.fromEntries(entries.filter((e) => e.type !== 'file').map((e) => [e.key, e.value]));
 }
 
 /** Sonuç bir önkoşul adımına mı ait? */
