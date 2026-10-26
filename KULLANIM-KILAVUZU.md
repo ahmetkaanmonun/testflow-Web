@@ -43,8 +43,11 @@ Kayıt ve koşum, Chrome/Edge eklentisiyle yapılır.
    başlar; login adımlarını her senaryoda tekrar kaydetmezsiniz. Önkoşulda
    şifre gibi test verisine bağlı değer varsa yanındaki listeden veri setini
    seçin. Önkoşul seçtiyseniz başlangıç adresini boş bırakabilirsiniz:
-   kayıt, önkoşulun bittiği sayfada (örn. login sonrası ana sayfa) başlar
-   ve senaryonun başlangıç adresi otomatik belirlenir.
+   hem kayıt hem sonraki koşumlar, önkoşulun bittiği sayfadan (örn. login
+   sonrası açılan sayfa) devam eder. Adres girerseniz önkoşuldan sonra o
+   adrese gidilir. Login sonrası adreslerde oturuma özel kodlar olabildiği
+   için adresi boş bırakmak genelde daha güvenlidir. Önkoşulu olmayan
+   senaryolarda başlangıç adresi zorunludur.
 4. **🔴 Kaydı Başlat** — hedef site yeni (tercihen gizli) pencerede açılır,
    sağ üstte kayıt çubuğu görünür
 5. Testi normal kullanır gibi yapın: tıklamalar, form doldurma, seçimler ve

@@ -130,7 +130,7 @@ public class ScenarioController {
         AuthenticatedUser user = CurrentUser.from(req);
         Scenario s = new Scenario();
         s.setName(body.name());
-        s.setStartUrl(body.startUrl());
+        s.setStartUrl(blankToNull(body.startUrl()));
         s.setFolderId(body.folderId());
         s.setTags(body.tags());
         s.setWorkspaceId(user.workspaceId());
@@ -139,6 +139,7 @@ public class ScenarioController {
             s.setPreconditionIds(PreconditionService.join(
                     preconditions.validate(user.workspaceId(), null, body.preconditionIds())));
         }
+        requireStartOrPrecondition(s);
         return toDetail(scenarios.save(s));
     }
 
@@ -150,7 +151,7 @@ public class ScenarioController {
         AuthenticatedUser user = CurrentUser.from(req);
         Scenario s = find(id, user);
         if (body.name() != null) s.setName(body.name());
-        if (body.startUrl() != null) s.setStartUrl(body.startUrl());
+        if (body.startUrl() != null) s.setStartUrl(blankToNull(body.startUrl())); // "" → temizle
         if (body.folderId() != null) s.setFolderId(body.folderId());
         if (body.tags() != null) s.setTags(body.tags());
         if (body.steps() != null) applySteps(s, body.steps());
@@ -162,7 +163,25 @@ public class ScenarioController {
             s.setPreconditionIds(PreconditionService.join(
                     preconditions.validate(user.workspaceId(), s.getId(), body.preconditionIds())));
         }
+        requireStartOrPrecondition(s);
         return toDetail(scenarios.save(s));
+    }
+
+    private static String blankToNull(String v) {
+        return v == null || v.isBlank() ? null : v.trim();
+    }
+
+    /**
+     * Başlangıç adresi yalnız önkoşulu olan senaryoda boş olabilir: koşum önkoşulun
+     * bittiği sayfadan devam eder (login sonrası adresler çoğu zaman oturuma özel
+     * kod içerdiği için kayıttaki adrese tekrar gitmek hataya yol açabilir).
+     * Önkoşul yoksa başlanacak bir nokta gerekir.
+     */
+    private static void requireStartOrPrecondition(Scenario s) {
+        if (s.getStartUrl() == null && PreconditionService.parse(s.getPreconditionIds()).isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Önkoşulu olmayan senaryolarda başlangıç adresi gerekli.");
+        }
     }
 
     @DeleteMapping("/{id}")
