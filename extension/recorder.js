@@ -65,12 +65,34 @@
     // Yapısal/anlamsal adaylar önce — metin EN SON çare (skoru en düşük):
     // buton/link metinleri sık değişir ("Giriş" → "Oturum Aç") ve otomasyonu kırar.
     if (el.id) candidates.push({ strategy: 'id', value: el.id, score: looksDynamic(el.id) ? 0.4 : 1.0 });
-    if (el.getAttribute('data-testid'))
-      candidates.push({ strategy: 'data-testid', value: el.getAttribute('data-testid'), score: 0.98 });
-    if (el.name) candidates.push({ strategy: 'name', value: el.name, score: looksDynamic(el.name) ? 0.42 : 0.9 });
-    if (el.getAttribute('aria-label'))
-      candidates.push({ strategy: 'aria-label', value: el.getAttribute('aria-label'), score: 0.85 });
-    if (el.placeholder) candidates.push({ strategy: 'placeholder', value: el.placeholder, score: 0.8 });
+    if (el.getAttribute('data-testid')) {
+      const v = el.getAttribute('data-testid');
+      const n = document.querySelectorAll(`[data-testid="${CSS.escape(v)}"]`).length;
+      candidates.push({ strategy: 'data-testid', value: v, score: n > 1 ? 0.98 * 0.4 : 0.98 });
+    }
+    // Sayfada tek olmayan locator'ın puanı düşürülür: aynı name="action" taşıyan
+    // Evet/Hayır butonlarında ilk eşleşme yanlış butona tıklatıyordu.
+    const count = (sel) => { try { return document.querySelectorAll(sel).length; } catch { return 0; } };
+    const uniq = (sel, score) => (count(sel) > 1 ? score * 0.4 : score);
+    if (el.name) {
+      const nameSel = `[name="${CSS.escape(el.name)}"]`;
+      const base = looksDynamic(el.name) ? 0.42 : 0.9;
+      candidates.push({ strategy: 'name', value: el.name, score: uniq(nameSel, base) });
+      // Aynı adı paylaşan butonlar/seçenekler value ile ayrışır (sunucu da bunu okur)
+      const val = el.getAttribute('value');
+      if (count(nameSel) > 1 && val) {
+        const sel = `${el.tagName.toLowerCase()}${nameSel}[value="${CSS.escape(val)}"]`;
+        if (count(sel) === 1) candidates.push({ strategy: 'css', value: sel, score: base + 0.02 });
+      }
+    }
+    if (el.getAttribute('aria-label')) {
+      const v = el.getAttribute('aria-label');
+      candidates.push({ strategy: 'aria-label', value: v, score: uniq(`[aria-label="${CSS.escape(v)}"]`, 0.85) });
+    }
+    if (el.placeholder) {
+      candidates.push({ strategy: 'placeholder', value: el.placeholder,
+                        score: uniq(`[placeholder="${CSS.escape(el.placeholder)}"]`, 0.8) });
+    }
     // Link adresi metinden çok daha stabildir
     if (el.tagName === 'A' && el.getAttribute('href') && el.getAttribute('href') !== '#')
       candidates.push({ strategy: 'href', value: el.getAttribute('href'), score: 0.75 });
