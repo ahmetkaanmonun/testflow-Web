@@ -94,6 +94,11 @@ Senaryo detayında:
   tıklanınca sayfa pencere açmaya çalışmazsa adım (yanlış alana yüklemek
   yerine) başarısız olur — o durumda yüklemeyi başlatan asıl butonun adımını
   upload yapın.
+  Belge yükleme adımı, o bölümde zaten yüklü bir belge varsa (bölümün
+  tablosunda belge satırı ya da bir dosya adı görünüyorsa) yükleme yapmadan
+  geçer; raporda "bu bölümde zaten yüklü bir belge var" notu görünür. Her
+  koşumda yeniden yüklenmesi gerekiyorsa adımdaki "belge varsa da yükle"
+  kutusunu işaretleyin.
 - **📝 Formu toplu doldur** — anket gibi çok sorulu ekranlar için. Sayfadaki
   tüm seçenekli sorularda (radyo düğmeleri, açılır listeler) bir seçeneği
   işaretler: etiketine göre ("Evet"), sırasına göre (1, son için -1) ya da

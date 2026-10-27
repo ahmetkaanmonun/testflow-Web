@@ -573,6 +573,45 @@
     return row.querySelector(sel) || row;
   }
 
+  // ---------- Bölüm ve yüklü belge tespiti ----------
+  // "Bölüm": elemandan yukarı çıkıp kendisine benzeyen kardeşleri olan ilk yapı
+  // (örn. her belge türünün başlık + form + tablosunu saran blok). Bulunamazsa null:
+  // emin olunamayan durumda karar verilmez.
+  function sectionOf(el) {
+    const info = discoverRows(el);
+    if (info && info.rowEl) return info.rowEl;
+    let cur = el.closest('form') || el.parentElement;
+    for (let d = 0; cur && cur.parentElement && cur !== document.body && d < 8; d++, cur = cur.parentElement) {
+      if ([...cur.parentElement.children].filter(similarTo(cur)).length >= 2) return cur;
+    }
+    return null;
+  }
+
+  const EMPTY_TEXT = /(veri|kayıt|kayit|belge|doküman|dokuman|dosya)\s*(bulunma|bulunamad|yok)|no (data|records?|files?)|empty/i;
+  const FILE_NAME = /[^\s\/\\<>"]{1,120}\.(pdf|docx?|xlsx?|pptx?|odt|ods|rtf|txt|csv|xml|json|zip|rar|7z|png|jpe?g|gif|tiff?|bmp|msg|eml)\b/i;
+
+  // Bölümde zaten yüklenmiş bir belge var mı? Varsa kısa bir tanım döner (rapor için).
+  function existingDocumentIn(section) {
+    for (const tr of section.querySelectorAll('tbody tr')) {
+      if (tr.querySelector('.dataTables_empty')) continue;
+      const tds = tr.querySelectorAll('td');
+      if (!tds.length) continue;
+      const cells = [...tds].map((td) => String(td.textContent || '').replace(/\s+/g, ' ').trim()).filter(Boolean);
+      const text = cells.join(' / ');
+      if (!text || EMPTY_TEXT.test(text)) continue;
+      if (tds.length === 1 && tds[0].colSpan > 1) continue; // "veri yok" tarzı tek hücreli satır
+      const name = cells.map((c) => (c.match(FILE_NAME) || [])[0]).find(Boolean);
+      return name || text.slice(0, 80);
+    }
+    // Tablo dışında listelenmiş dosya adı (bağlantı, liste elemanı…)
+    for (const n of section.querySelectorAll('a, li, span, td, div')) {
+      if (n.children.length > 2) continue;
+      const m = String(n.textContent || '').match(FILE_NAME);
+      if (m) return m[0];
+    }
+    return null;
+  }
+
   // ---------- Dosya yükleme yardımcıları ----------
   function fileFromDataUrl(dataUrl, fileName) {
     const [head, b64] = String(dataUrl).split(',');
@@ -698,6 +737,21 @@
       try { meta = JSON.parse(step.meta || '{}'); } catch {}
       const file = fileFromDataUrl(step.value, step.fileName);
       let healInfo = { healed: false, healedStrategy: null };
+      // Bölümde zaten belge varsa yüklemeden geç (kullanıcı ayrıca bir şey ayarlamaz).
+      // "Yine de yükle" seçiliyse ya da bölüm belirlenemiyorsa her zamanki gibi yüklenir.
+      const alreadyUploaded = (el) => {
+        if (meta.uploadAlways) return null;
+        const section = sectionOf(el);
+        if (!section) return null;
+        const existing = existingDocumentIn(section);
+        if (!existing) return null;
+        return (async () => {
+          const r = { status: 'skipped', ...healInfo, screenshot: await captureScreenshot(),
+                      errorMessage: `Not: bu bölümde zaten yüklü bir belge var (${existing}); yükleme yapılmadı.` };
+          await reportResult(stepIndex, step, r);
+          return r;
+        })();
+      };
       const passed = async (note) => {
         const r = { status: 'passed', ...healInfo, screenshot: await captureScreenshot(), ...(note ? { errorMessage: 'Not: ' + note } : {}) };
         await reportResult(stepIndex, step, r);
@@ -710,6 +764,8 @@
         timing.locatedAt = Date.now();
         if (direct.notFound) return fail(`${targetName(step)} ${secs(timeoutMs)} sn içinde sayfada bulunamadı.`);
         if (direct.usedIndex > 0) healInfo = { healed: true, healedStrategy: direct.strategy };
+        const skip = alreadyUploaded(direct.el);
+        if (skip) return skip;
         setFileOn(direct.el, file);
         return passed(null);
       }
@@ -721,6 +777,8 @@
       const trigger = t.el;
       // Yedek locator'a geçildiyse (örn. belirsiz name yerine tekil css) kalıcılaşsın
       if (t.usedIndex > 0) healInfo = { healed: true, healedStrategy: t.strategy };
+      const skipT = alreadyUploaded(trigger);
+      if (skipT) return skipT;
 
       // 2a) <label for="..."> ya da içinde dosya alanı taşıyan eleman: bağlantı kesin
       const own = (trigger.tagName === 'LABEL' && trigger.control && trigger.control.type === 'file')
