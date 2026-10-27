@@ -1062,6 +1062,48 @@ export default function ScenarioDetail() {
                 </div>
               );
             })()}
+
+            {!['repeat-start', 'repeat-end'].includes(step.action) && (() => {
+              let meta = {};
+              try { meta = JSON.parse(step.meta || '{}'); } catch {}
+              const cond = meta.condition || null;
+              const hasElement = (() => { try { return JSON.parse(step.candidates || '[]').length > 0; } catch { return false; } })();
+              if (!cond) {
+                return (
+                  <div style={{ marginTop: 6, marginLeft: 34 }}>
+                    <button className="ghost" style={{ fontSize: 12, padding: '2px 8px', opacity: 0.6 }}
+                            title="Adımı yalnızca belirli bir metin varsa/yoksa çalıştır"
+                            onClick={() => updateMeta(i, 'condition', { mode: 'if-no-text', scope: hasElement ? 'section' : 'page', text: '' })}>
+                      ＋ koşul
+                    </button>
+                  </div>
+                );
+              }
+              const setCond = (patch) => updateMeta(i, 'condition', { ...cond, ...patch });
+              const small = { fontSize: 12, padding: '2px 6px', width: 'auto' };
+              return (
+                <div className="row muted" style={{ marginTop: 8, marginLeft: 34, gap: 6, flexWrap: 'wrap', fontSize: 12 }}>
+                  <span>Yalnızca</span>
+                  <select value={cond.scope || 'section'} style={small} onChange={(e) => setCond({ scope: e.target.value })}>
+                    {hasElement && <option value="section">elemanın bölümünde</option>}
+                    <option value="page">sayfada</option>
+                  </select>
+                  <input value={cond.text || ''} placeholder="örn. Tabloda Veri Bulunmamaktadır"
+                         onChange={(e) => setCond({ text: e.target.value })}
+                         style={{ fontSize: 12, padding: '2px 8px', width: 260 }} />
+                  <select value={cond.mode} style={small} onChange={(e) => setCond({ mode: e.target.value })}>
+                    <option value="if-text">yazıyorsa</option>
+                    <option value="if-no-text">yazmıyorsa</option>
+                  </select>
+                  <span>çalıştır</span>
+                  <button className="ghost" style={{ fontSize: 12, padding: '2px 8px' }}
+                          onClick={() => updateMeta(i, 'condition', null)} title="Koşulu kaldır">✕</button>
+                  {!String(cond.text || '').trim() && (
+                    <span style={{ color: 'var(--yellow)' }}>Metni yazın; boşken koşul uygulanmaz.</span>
+                  )}
+                </div>
+              );
+            })()}
           </div>
           {insertPoint(i)}
           </div>

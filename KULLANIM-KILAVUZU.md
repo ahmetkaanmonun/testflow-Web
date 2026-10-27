@@ -94,6 +94,12 @@ Senaryo detayında:
   tıklanınca sayfa pencere açmaya çalışmazsa adım (yanlış alana yüklemek
   yerine) başarısız olur — o durumda yüklemeyi başlatan asıl butonun adımını
   upload yapın.
+- **Koşullu adım:** Her adımın altındaki **＋ koşul** ile adım yalnızca belirli
+  bir metin varsa ya da yoksa çalıştırılır. Arama, adımın elemanının bulunduğu
+  **bölümde** (örn. tek bir belge türünün form + tablosu) ya da **tüm sayfada**
+  yapılır. Örnek: belge yükleme adımına "Yalnızca elemanın bölümünde
+  'Tabloda Veri Bulunmamaktadır' yazıyorsa çalıştır" — belge zaten yüklüyse
+  adım atlanır (skipped) ve raporda nedeni yazar.
 - **📝 Formu toplu doldur** — anket gibi çok sorulu ekranlar için. Sayfadaki
   tüm seçenekli sorularda (radyo düğmeleri, açılır listeler) bir seçeneği
   işaretler: etiketine göre ("Evet"), sırasına göre (1, son için -1) ya da

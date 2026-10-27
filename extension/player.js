@@ -591,6 +591,42 @@
     input.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
+  // ---------- Koşul değerlendirme ----------
+  // "Bölüm": adımın elemanından yukarı çıkıp kendisine benzeyen kardeşleri olan ilk
+  // yapı (tekrar bloğundaki satır mantığı) — örn. her belge türünün form + tablosunu
+  // saran blok. Bulunamazsa en yakın form/fieldset/section/kart.
+  function sectionOf(el) {
+    const info = discoverRows(el);
+    if (info && info.rowEl) return info.rowEl;
+    // Yerleşime bakmadan, yalnız yapıya göre: formdan (yoksa ebeveynden) yukarı çıkıp
+    // kendisine benzeyen kardeşleri olan ilk yapı
+    let cur = el.closest('form') || el.parentElement;
+    for (let d = 0; cur && cur.parentElement && cur !== document.body && d < 8; d++, cur = cur.parentElement) {
+      if ([...cur.parentElement.children].filter(similarTo(cur)).length >= 2) return cur;
+    }
+    return el.closest('form, fieldset, section, article, li, tr, .card, .panel') || el.parentElement || document.body;
+  }
+
+  async function evaluateCondition(step, cond) {
+    const want = normText(cond.text);
+    let scopeEl = document.body;
+    let where = 'sayfada';
+    if (cond.scope !== 'page') {
+      const cands = JSON.parse(step.candidates || '[]');
+      if (!cands.length) return { error: 'Bölüm koşulu için adımın bir elemanı olmalı; koşulun kapsamını "tüm sayfa" yapın.' };
+      const { timeoutMs } = resolveWait(step, false);
+      const f = await findElement(cands, null, timeoutMs, 'exists', null, stepLabel(step));
+      if (f.notFound) return { error: `${targetName(step)} ${secs(timeoutMs)} sn içinde bulunamadı; koşul değerlendirilemedi.` };
+      scopeEl = sectionOf(f.el);
+      where = 'bölümünde';
+    }
+    // textContent: gizli öğeler dahil (boş tablo mesajı çoğu zaman gizli bir kapsayıcıda durur)
+    const has = normText(scopeEl.textContent).includes(want);
+    const run = cond.mode === 'if-text' ? has : !has;
+    const reason = `${where} '${cond.text}' ${has ? 'var' : 'yok'}.`;
+    return { run, reason };
+  }
+
   async function captureScreenshot() {
     try {
       const res = await chrome.runtime.sendMessage({ type: 'CAPTURE' });
@@ -611,6 +647,27 @@
     } catch {}
     const failStatus = optional ? 'skipped' : 'failed';
     const failPrefix = optional ? 'Opsiyonel adım atlandı — ' : '';
+
+    // ---------- Koşullu adım ----------
+    // meta.condition = { mode: 'if-text' | 'if-no-text', scope: 'section' | 'page', text }
+    // Koşul sağlanmazsa adım çalıştırılmaz, 'skipped' raporlanır (nedeniyle birlikte).
+    {
+      let cond = null;
+      try { cond = JSON.parse(step.meta || '{}').condition || null; } catch {}
+      if (cond && ['if-text', 'if-no-text'].includes(cond.mode) && String(cond.text || '').trim()) {
+        const ev = await evaluateCondition(step, cond);
+        if (ev.error) {
+          const r = { status: failStatus, healed: false, screenshot: await captureScreenshot(), errorMessage: failPrefix + ev.error };
+          await reportResult(stepIndex, step, r);
+          return r;
+        }
+        if (!ev.run) {
+          const r = { status: 'skipped', healed: false, errorMessage: 'Not: koşul sağlanmadı, adım çalıştırılmadı — ' + ev.reason };
+          await reportResult(stepIndex, step, r);
+          return r;
+        }
+      }
+    }
 
     // goto: adrese git — element gerektirmez. Rapor ÖNCE (navigasyon script'i öldürür);
     // yeni sayfada player kaldığı index'ten devam eder.

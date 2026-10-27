@@ -166,7 +166,13 @@ export function autoDescribe(step) {
 export function describeStep(step) {
   const meta = parse(step.meta, {}) || {};
   const custom = typeof meta.description === 'string' ? meta.description.trim() : '';
-  const text = custom || autoDescribe(step);
+  let text = custom || autoDescribe(step);
+  const cond = meta.condition;
+  if (cond && ['if-text', 'if-no-text'].includes(cond.mode) && String(cond.text || '').trim()) {
+    const where = cond.scope === 'page' ? 'Sayfada' : 'Bölümünde';
+    const prefix = `${where} '${clip(cond.text, 40)}' ${cond.mode === 'if-text' ? 'yazıyorsa' : 'yazmıyorsa'}: `;
+    text = prefix + text.charAt(0).toLocaleLowerCase('tr-TR') + text.slice(1);
+  }
   return text.charAt(0).toLocaleUpperCase('tr-TR') + text.slice(1);
 }
 
