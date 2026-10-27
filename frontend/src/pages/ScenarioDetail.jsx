@@ -870,6 +870,20 @@ export default function ScenarioDetail() {
                              type={step.sensitive ? 'password' : 'text'} style={{ flex: 1 }} />
                     )}
 
+                    {step.action === 'upload' && (() => {
+                      let m = {};
+                      try { m = JSON.parse(step.meta || '{}'); } catch {}
+                      return (
+                        <label className="row muted" style={{ fontSize: 12, gap: 4 }}
+                               title="Kapalıyken: bölümde zaten bir belge varsa yükleme atlanır ve senaryo devam eder">
+                          <input type="checkbox" checked={!!m.uploadAlways}
+                                 onChange={(e) => updateMeta(i, 'uploadAlways', e.target.checked)}
+                                 style={{ width: 'auto' }} />
+                          belge varsa da yükle
+                        </label>
+                      );
+                    })()}
+
                     {cfg.sensitive && (
                       <label className="row muted" style={{ fontSize: 12, gap: 4 }}>
                         <input type="checkbox" checked={step.sensitive}
