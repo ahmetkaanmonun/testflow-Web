@@ -89,8 +89,11 @@ Senaryo detayında:
   (`upload`) dosyayı test verisinden alır (veri setinde dosya türünde bir
   anahtar). Kayıtta dosya alanı yakalanmadıysa, "Belge Yükle" gibi butonun
   tıklama adımının aksiyonunu `upload` yapıp dosya anahtarını seçmeniz yeterli:
-  TestFlow butonun bağlı olduğu dosya alanını bulur; alan sayfada yoksa sayfanın
-  dosya penceresi açma isteğini yakalayıp dosyayı doğrudan verir.
+  TestFlow butona tıklar ve sayfanın hangi dosya alanı için pencere açmak
+  istediğini yakalar; pencere açılmaz, dosya tam o alana verilir. Butona
+  tıklanınca sayfa pencere açmaya çalışmazsa adım (yanlış alana yüklemek
+  yerine) başarısız olur — o durumda yüklemeyi başlatan asıl butonun adımını
+  upload yapın.
 - **📝 Formu toplu doldur** — anket gibi çok sorulu ekranlar için. Sayfadaki
   tüm seçenekli sorularda (radyo düğmeleri, açılır listeler) bir seçeneği
   işaretler: etiketine göre ("Evet"), sırasına göre (1, son için -1) ya da
