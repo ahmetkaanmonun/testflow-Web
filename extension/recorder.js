@@ -93,6 +93,17 @@
       candidates.push({ strategy: 'placeholder', value: el.placeholder,
                         score: uniq(`[placeholder="${CSS.escape(el.placeholder)}"]`, 0.8) });
     }
+    // Elemanı sayfada tekil kılan özel bir özellik (örn. formid="6", data-id="…"):
+    // aynı metin ve adı taşıyan kardeşler arasında konumdan bağımsız, sağlam locator.
+    const SKIP_ATTR = /^(id|class|style|name|type|href|src|value|placeholder|title|tabindex|role|aria-.*|data-testid|on.*|target|rel|alt|width|height|for|disabled|readonly|checked|selected|autocomplete|data-select2-id|data-dt-idx)$/i;
+    let attrAdded = 0;
+    for (const at of [...el.attributes]) {
+      if (attrAdded >= 2 || SKIP_ATTR.test(at.name) || !at.value || at.value.length > 40) continue;
+      // Uzun, karışık değerler (oturuma özel kod) güvenilmez; kısa sayı/kelime kabul
+      if (at.value.length > 12 && /\d/.test(at.value) && /[a-z]/i.test(at.value)) continue;
+      const sel = `${el.tagName.toLowerCase()}[${CSS.escape(at.name)}="${CSS.escape(at.value)}"]`;
+      if (count(sel) === 1) { candidates.push({ strategy: 'css', value: sel, score: 0.88 }); attrAdded++; }
+    }
     // Link adresi metinden çok daha stabildir
     if (el.tagName === 'A' && el.getAttribute('href') && el.getAttribute('href') !== '#')
       candidates.push({ strategy: 'href', value: el.getAttribute('href'), score: 0.75 });
@@ -274,7 +285,7 @@
       candidates: JSON.stringify(buildCandidates(el)),
       value: null,
       sensitive: false,
-      meta: JSON.stringify({ tag: el.tagName.toLowerCase(), inputType: el.type || null, url: location.href }),
+      meta: JSON.stringify({ tag: el.tagName.toLowerCase(), inputType: el.tagName === 'INPUT' ? (el.type || null) : null, url: location.href }),
     }, el);
   }, true);
 
@@ -329,7 +340,7 @@
       value: sensitive ? '***' : el.value,
       sensitive,
       meta: JSON.stringify({
-        tag: el.tagName.toLowerCase(), inputType: el.type || null, url: location.href,
+        tag: el.tagName.toLowerCase(), inputType: el.tagName === 'INPUT' ? (el.type || null) : null, url: location.href,
         ...(el.tagName === 'SELECT' && el.selectedOptions[0] ? { optionText: clean(el.selectedOptions[0].text) } : {}),
       }),
       replacePrev,
