@@ -81,17 +81,25 @@
   // butonları) kayıttaki etiketle ayırt edilir. Etiketle eşleşen yoksa locator bu
   // sayfada belirsizdir: null dönülür ve sıradaki aday denenir. Önceden ilk eşleşme
   // seçiliyordu — tıklama "yapılıyor" ama yanlış butona yapılıyordu.
+  // Son findByCandidate çağrısı birden fazla eşit adaydan birini mi seçti?
+  // (findElement bunu görüp tekil sonuç veren başka bir locator arar)
+  let lastAmbiguous = false;
+
   function choose(list, hint, validate = null) {
     // Önce adımın türüne uymayanlar elenir (upload yalnız dosya alanı, fill yalnız
     // metin alanı…); etiket karşılaştırması ancak ondan sonra yapılır. Aksi halde
     // aynı name'i taşıyan bağlantı ile dosya alanından bağlantı seçilip adım düşerdi.
     const arr = validate ? [...list].filter((el) => validate(el)) : [...list];
-    if (arr.length <= 1 || !hint) return pickVisible(arr);
-    const byLabel = arr.filter((el) => labelMatches(el, hint));
-    return byLabel.length ? pickVisible(byLabel) : null;
+    if (arr.length <= 1) { lastAmbiguous = false; return pickVisible(arr); }
+    const byLabel = hint ? arr.filter((el) => labelMatches(el, hint)) : arr;
+    if (hint && !byLabel.length) { lastAmbiguous = false; return null; }
+    // Etiket de ayırt edemedi (örn. her bölümde birebir aynı "Belge Yükle" bağlantısı)
+    lastAmbiguous = byLabel.filter(reallyVisible).length > 1 || (byLabel.length > 1 && !byLabel.some(reallyVisible));
+    return pickVisible(byLabel);
   }
 
   function findByCandidate(c, hint = null, validate = null) {
+    lastAmbiguous = false;
     try {
       switch (c.strategy) {
         case 'id': return document.getElementById(c.value);
@@ -110,7 +118,9 @@
           // En derin eşleşme: içinde başka eşleşme barındırmayan
           // (butonu saran div yerine butonun kendisi seçilir); görünür olan önce
           const deepest = pool.filter((n) => !pool.some((m) => m !== n && n.contains(m)));
-          return pickVisible(deepest.length ? deepest : pool);
+          const finalPool = deepest.length ? deepest : pool;
+          lastAmbiguous = finalPool.filter(reallyVisible).length > 1;
+          return pickVisible(finalPool);
         }
         case 'css': return choose(document.querySelectorAll(c.value), hint, validate);
         case 'href': {
@@ -174,14 +184,23 @@
     const deadline = Date.now() + timeoutMs;
     let seenNotReady = false; // element var ama koşul sağlanmadı (hata mesajı için)
     while (Date.now() < deadline) {
+      // Belirsiz eşleşme (aynı locator'a uyan birden çok eşit eleman) yalnız yedektir:
+      // önce tekil sonuç veren bir sonraki aday aranır. Hiçbiri tekil değilse ilk
+      // belirsiz eşleşmeye dönülür (önceki davranış).
+      let fallback = null;
       for (let i = 0; i < sorted.length; i++) {
         const el = findByCandidate(sorted[i], hint, validate);
+        const ambiguous = lastAmbiguous;
         if (!el || (validate && !validate(el))) continue;
         if (isReady(el, waitFor, action)) {
-          return { el, usedIndex: i, strategy: sorted[i].strategy };
+          const hit = { el, usedIndex: i, strategy: sorted[i].strategy };
+          if (!ambiguous) return hit;
+          if (!fallback) fallback = hit;
+          continue;
         }
         seenNotReady = true;
       }
+      if (fallback) return fallback;
       await sleep(250);
     }
     return { notFound: true, seenNotReady };
@@ -678,17 +697,19 @@
       let meta = {};
       try { meta = JSON.parse(step.meta || '{}'); } catch {}
       const file = fileFromDataUrl(step.value, step.fileName);
+      let healInfo = { healed: false, healedStrategy: null };
       const passed = async (note) => {
-        const r = { status: 'passed', healed: false, screenshot: await captureScreenshot(), ...(note ? { errorMessage: 'Not: ' + note } : {}) };
+        const r = { status: 'passed', ...healInfo, screenshot: await captureScreenshot(), ...(note ? { errorMessage: 'Not: ' + note } : {}) };
         await reportResult(stepIndex, step, r);
         return r;
       };
 
       // 1) Adım doğrudan dosya alanında kaydedildiyse: o alan
-      if (meta.inputType === 'file') {
+      if (meta.inputType === 'file' && (meta.tag || 'input') === 'input') {
         const direct = await findElement(candidates, validatorFor(step), timeoutMs, 'exists', 'upload', hint);
         timing.locatedAt = Date.now();
         if (direct.notFound) return fail(`${targetName(step)} ${secs(timeoutMs)} sn içinde sayfada bulunamadı.`);
+        if (direct.usedIndex > 0) healInfo = { healed: true, healedStrategy: direct.strategy };
         setFileOn(direct.el, file);
         return passed(null);
       }
@@ -698,6 +719,8 @@
       timing.locatedAt = Date.now();
       if (t.notFound) return fail(`${targetName(step)} ${secs(timeoutMs)} sn içinde ekranda bulunamadı.`);
       const trigger = t.el;
+      // Yedek locator'a geçildiyse (örn. belirsiz name yerine tekil css) kalıcılaşsın
+      if (t.usedIndex > 0) healInfo = { healed: true, healedStrategy: t.strategy };
 
       // 2a) <label for="..."> ya da içinde dosya alanı taşıyan eleman: bağlantı kesin
       const own = (trigger.tagName === 'LABEL' && trigger.control && trigger.control.type === 'file')
