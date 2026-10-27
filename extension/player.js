@@ -81,21 +81,24 @@
   // butonları) kayıttaki etiketle ayırt edilir. Etiketle eşleşen yoksa locator bu
   // sayfada belirsizdir: null dönülür ve sıradaki aday denenir. Önceden ilk eşleşme
   // seçiliyordu — tıklama "yapılıyor" ama yanlış butona yapılıyordu.
-  function choose(list, hint) {
-    const arr = [...list];
+  function choose(list, hint, validate = null) {
+    // Önce adımın türüne uymayanlar elenir (upload yalnız dosya alanı, fill yalnız
+    // metin alanı…); etiket karşılaştırması ancak ondan sonra yapılır. Aksi halde
+    // aynı name'i taşıyan bağlantı ile dosya alanından bağlantı seçilip adım düşerdi.
+    const arr = validate ? [...list].filter((el) => validate(el)) : [...list];
     if (arr.length <= 1 || !hint) return pickVisible(arr);
     const byLabel = arr.filter((el) => labelMatches(el, hint));
     return byLabel.length ? pickVisible(byLabel) : null;
   }
 
-  function findByCandidate(c, hint = null) {
+  function findByCandidate(c, hint = null, validate = null) {
     try {
       switch (c.strategy) {
         case 'id': return document.getElementById(c.value);
-        case 'data-testid': return choose(document.querySelectorAll(`[data-testid="${CSS.escape(c.value)}"]`), hint);
-        case 'name': return choose(document.querySelectorAll(`[name="${CSS.escape(c.value)}"]`), hint);
-        case 'aria-label': return choose(document.querySelectorAll(`[aria-label="${CSS.escape(c.value)}"]`), hint);
-        case 'placeholder': return choose(document.querySelectorAll(`[placeholder="${CSS.escape(c.value)}"]`), hint);
+        case 'data-testid': return choose(document.querySelectorAll(`[data-testid="${CSS.escape(c.value)}"]`), hint, validate);
+        case 'name': return choose(document.querySelectorAll(`[name="${CSS.escape(c.value)}"]`), hint, validate);
+        case 'aria-label': return choose(document.querySelectorAll(`[aria-label="${CSS.escape(c.value)}"]`), hint, validate);
+        case 'placeholder': return choose(document.querySelectorAll(`[placeholder="${CSS.escape(c.value)}"]`), hint, validate);
         case 'text': {
           const nodes = [...document.querySelectorAll('button, a, label, span, div, [role="button"]')]
             .filter((n) => (n.innerText || '').trim().slice(0, 60) === c.value);
@@ -109,10 +112,10 @@
           const deepest = pool.filter((n) => !pool.some((m) => m !== n && n.contains(m)));
           return pickVisible(deepest.length ? deepest : pool);
         }
-        case 'css': return choose(document.querySelectorAll(c.value), hint);
+        case 'css': return choose(document.querySelectorAll(c.value), hint, validate);
         case 'href': {
           const v = String(c.value).replace(/"/g, '\\"');
-          return choose(document.querySelectorAll(`a[href="${v}"]`), hint);
+          return choose(document.querySelectorAll(`a[href="${v}"]`), hint, validate);
         }
         default: return null;
       }
@@ -172,7 +175,7 @@
     let seenNotReady = false; // element var ama koşul sağlanmadı (hata mesajı için)
     while (Date.now() < deadline) {
       for (let i = 0; i < sorted.length; i++) {
-        const el = findByCandidate(sorted[i], hint);
+        const el = findByCandidate(sorted[i], hint, validate);
         if (!el || (validate && !validate(el))) continue;
         if (isReady(el, waitFor, action)) {
           return { el, usedIndex: i, strategy: sorted[i].strategy };
@@ -551,6 +554,42 @@
     return row.querySelector(sel) || row;
   }
 
+  // ---------- Dosya yükleme yardımcıları ----------
+  function fileFromDataUrl(dataUrl, fileName) {
+    const [head, b64] = String(dataUrl).split(',');
+    const mime = (head.match(/data:(.*?)(;|$)/) || [])[1] || 'application/octet-stream';
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new File([bytes], fileName || 'dosya', { type: mime });
+  }
+
+  function setFileOn(input, file) {
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    input.files = dt.files;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  // Tetikleyici butonun/bağlantının bağlı olduğu dosya alanı: içinde, bağlı olduğu
+  // label'da, ya da yukarı doğru en yakın kapsayıcıda TEK dosya alanı varsa o.
+  function nearbyFileInput(el) {
+    const isFile = (n) => n && n.tagName === 'INPUT' && n.type === 'file';
+    if (isFile(el)) return el;
+    if (el.tagName === 'LABEL' && isFile(el.control)) return el.control;
+    const inside = el.querySelector && el.querySelector('input[type="file"]');
+    if (inside) return inside;
+    let anc = el.parentElement;
+    for (let depth = 0; anc && depth < 6; depth++, anc = anc.parentElement) {
+      const list = anc.querySelectorAll('input[type="file"]');
+      if (list.length === 1) return list[0];
+      if (list.length > 1) return null; // belirsiz: tahmin etme
+    }
+    const all = document.querySelectorAll('input[type="file"]');
+    return all.length === 1 ? all[0] : null;
+  }
+
   async function captureScreenshot() {
     try {
       const res = await chrome.runtime.sendMessage({ type: 'CAPTURE' });
@@ -637,6 +676,57 @@
 
     const candidates = JSON.parse(step.candidates || '[]');
     const { timeoutMs, waitFor } = resolveWait(step, optional);
+
+    // ---------- Dosya yükleme ----------
+    // Kullanıcı çoğu zaman dosya alanına değil onu tetikleyen bir butona/bağlantıya
+    // tıklar; kayıttaki locator'lar da o elemana aittir. Sırayla: (1) locator doğrudan
+    // dosya alanını buluyorsa oraya, (2) buton/bağlantı buluyorsa çevresindeki dosya
+    // alanına, (3) çevrede de yoksa sayfa alanı kodla oluşturuyordur: dosya penceresi
+    // açma çağrısı yakalanıp dosya doğrudan verilir.
+    if (step.action === 'upload' && !opts.overrideEl) {
+      const fail = async (msg) => {
+        const r = { status: failStatus, healed: false, screenshot: await captureScreenshot(), errorMessage: failPrefix + msg };
+        await reportResult(stepIndex, step, r);
+        return r;
+      };
+      if (!step.value || !String(step.value).startsWith('data:')) {
+        return fail('Dosya içeriği yok — bu adımı dosya tipli bir test verisi anahtarına 📎 ile bağlayın.');
+      }
+      const hint = stepLabel(step);
+      const direct = await findElement(candidates, validatorFor(step), Math.min(timeoutMs, 2500), 'exists', 'upload', hint);
+      timing.locatedAt = Date.now();
+      let input = direct.notFound ? null : direct.el;
+      let trigger = null;
+      if (!input) {
+        const t = await findElement(candidates, null, timeoutMs, 'visible', 'click', hint);
+        timing.locatedAt = Date.now();
+        trigger = t.notFound ? null : t.el;
+        if (trigger) input = nearbyFileInput(trigger);
+      }
+      if (input) {
+        setFileOn(input, fileFromDataUrl(step.value, step.fileName));
+        const r = { status: 'passed', healed: false, screenshot: await captureScreenshot(),
+                    ...(trigger ? { errorMessage: 'Not: dosya, butonun bağlı olduğu dosya alanına yerleştirildi.' } : {}) };
+        await reportResult(stepIndex, step, r);
+        return r;
+      }
+      if (!trigger) return fail(`${targetName(step)} ${secs(timeoutMs)} sn içinde ekranda bulunamadı.`);
+      const armed = await chrome.runtime.sendMessage({ type: 'ARM_FILE_INTERCEPT', dataUrl: step.value, fileName: step.fileName });
+      if (!armed || !armed.ok) return fail('Dosya penceresi yakalanamadı: ' + ((armed && armed.error) || 'bilinmeyen hata'));
+      trigger.scrollIntoView({ block: 'center' });
+      realisticClick(trigger);
+      const deadline = Date.now() + 4000;
+      while (Date.now() < deadline && document.documentElement.getAttribute('data-tf-upload') !== 'done') await sleep(100);
+      if (document.documentElement.getAttribute('data-tf-upload') !== 'done') {
+        return fail(`${targetName(step)} tıklandı ama sayfa bir dosya seçme penceresi açmaya çalışmadı. ` +
+                    'Bu eleman dosya yüklemeyi başlatmıyor olabilir; önceki adımı kontrol edin.');
+      }
+      document.documentElement.removeAttribute('data-tf-upload');
+      const r = { status: 'passed', healed: false, screenshot: await captureScreenshot(),
+                  errorMessage: 'Not: dosya seçme penceresi yerine dosya doğrudan verildi.' };
+      await reportResult(stepIndex, step, r);
+      return r;
+    }
     const found = opts.overrideEl
       ? { el: opts.overrideEl, usedIndex: 0, strategy: 'satır' } // tekrar bloğu: o turun satırındaki hedef
       : await findElement(candidates, validatorFor(step), timeoutMs, waitFor, step.action, stepLabel(step));

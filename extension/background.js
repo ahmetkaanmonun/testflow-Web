@@ -265,6 +265,54 @@ async function handle(msg, sender) {
     return { ok: true };
   }
 
+  // Upload adımı, sayfa dosya alanını DOM'a eklemeden kodla oluşturuyorsa: sayfanın
+  // dosya penceresi açma çağrısını (input.click / showPicker) tek seferlik yakalayıp
+  // pencere yerine dosyayı doğrudan o alana verir. Kullanıcı pencereden dosya seçmiş
+  // gibi 'change' olayı tetiklenir. 8 sn içinde kullanılmazsa kendiliğinden kaldırılır.
+  if (msg.type === 'ARM_FILE_INTERCEPT') {
+    const s = await getSession();
+    if (!s || s.mode !== 'play' || !sender.tab || sender.tab.id !== s.tabId) return { ok: false };
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: sender.tab.id },
+        world: 'MAIN',
+        func: (dataUrl, fileName) => {
+          const toFile = () => {
+            const [head, b64] = dataUrl.split(',');
+            const mime = (head.match(/data:(.*?)(;|$)/) || [])[1] || 'application/octet-stream';
+            const bin = atob(b64);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            return new File([bytes], fileName || 'dosya', { type: mime });
+          };
+          const P = HTMLInputElement.prototype;
+          const origClick = P.click;
+          const origPicker = P.showPicker;
+          const restore = () => { P.click = origClick; if (origPicker) P.showPicker = origPicker; };
+          const handle = (input) => {
+            if (!input || input.type !== 'file') return false;
+            const dt = new DataTransfer();
+            dt.items.add(toFile());
+            input.files = dt.files;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            restore();
+            document.documentElement.setAttribute('data-tf-upload', 'done');
+            return true;
+          };
+          P.click = function (...args) { if (handle(this)) return undefined; return origClick.apply(this, args); };
+          if (origPicker) P.showPicker = function (...args) { if (handle(this)) return undefined; return origPicker.apply(this, args); };
+          document.documentElement.removeAttribute('data-tf-upload');
+          setTimeout(restore, 8000);
+        },
+        args: [msg.dataUrl, msg.fileName || null],
+      });
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: String(e).slice(0, 200) };
+    }
+  }
+
   // Kullanıcının script adımı: sayfanın kendi ortamında (MAIN world), konsoldaki
   // gibi çalışır. async desteklenir; testData ile veri setine erişilir.
   // Sonuç: { ok, value?, error? } — hata fırlatma veya false dönüşü başarısızlıktır.

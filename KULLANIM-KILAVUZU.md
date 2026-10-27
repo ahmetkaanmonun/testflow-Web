@@ -84,6 +84,13 @@ Senaryo detayında:
   kullanın ve **Kaydı Bitir**'e basın; adımlar seçtiğiniz yere eklenir.
   Önceki adımlardan biri geçmezse kayda geçilmez ve nedeni gösterilir.
 - **⏱ Bekleme** / **🌐 Adrese git** — element gerektirmeyen adımlar.
+- **Dosya yükleme:** Windows'un dosya seçme penceresi tarayıcının dışında
+  olduğu için kaydedilemez ve otomasyonda kullanılmaz. Dosya yükleme adımı
+  (`upload`) dosyayı test verisinden alır (veri setinde dosya türünde bir
+  anahtar). Kayıtta dosya alanı yakalanmadıysa, "Belge Yükle" gibi butonun
+  tıklama adımının aksiyonunu `upload` yapıp dosya anahtarını seçmeniz yeterli:
+  TestFlow butonun bağlı olduğu dosya alanını bulur; alan sayfada yoksa sayfanın
+  dosya penceresi açma isteğini yakalayıp dosyayı doğrudan verir.
 - **📝 Formu toplu doldur** — anket gibi çok sorulu ekranlar için. Sayfadaki
   tüm seçenekli sorularda (radyo düğmeleri, açılır listeler) bir seçeneği
   işaretler: etiketine göre ("Evet"), sırasına göre (1, son için -1) ya da
