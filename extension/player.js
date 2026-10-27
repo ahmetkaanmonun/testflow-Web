@@ -81,21 +81,24 @@
   // butonları) kayıttaki etiketle ayırt edilir. Etiketle eşleşen yoksa locator bu
   // sayfada belirsizdir: null dönülür ve sıradaki aday denenir. Önceden ilk eşleşme
   // seçiliyordu — tıklama "yapılıyor" ama yanlış butona yapılıyordu.
-  function choose(list, hint) {
-    const arr = [...list];
+  function choose(list, hint, validate = null) {
+    // Önce adımın türüne uymayanlar elenir (upload yalnız dosya alanı, fill yalnız
+    // metin alanı…); etiket karşılaştırması ancak ondan sonra yapılır. Aksi halde
+    // aynı name'i taşıyan bağlantı ile dosya alanından bağlantı seçilip adım düşerdi.
+    const arr = validate ? [...list].filter((el) => validate(el)) : [...list];
     if (arr.length <= 1 || !hint) return pickVisible(arr);
     const byLabel = arr.filter((el) => labelMatches(el, hint));
     return byLabel.length ? pickVisible(byLabel) : null;
   }
 
-  function findByCandidate(c, hint = null) {
+  function findByCandidate(c, hint = null, validate = null) {
     try {
       switch (c.strategy) {
         case 'id': return document.getElementById(c.value);
-        case 'data-testid': return choose(document.querySelectorAll(`[data-testid="${CSS.escape(c.value)}"]`), hint);
-        case 'name': return choose(document.querySelectorAll(`[name="${CSS.escape(c.value)}"]`), hint);
-        case 'aria-label': return choose(document.querySelectorAll(`[aria-label="${CSS.escape(c.value)}"]`), hint);
-        case 'placeholder': return choose(document.querySelectorAll(`[placeholder="${CSS.escape(c.value)}"]`), hint);
+        case 'data-testid': return choose(document.querySelectorAll(`[data-testid="${CSS.escape(c.value)}"]`), hint, validate);
+        case 'name': return choose(document.querySelectorAll(`[name="${CSS.escape(c.value)}"]`), hint, validate);
+        case 'aria-label': return choose(document.querySelectorAll(`[aria-label="${CSS.escape(c.value)}"]`), hint, validate);
+        case 'placeholder': return choose(document.querySelectorAll(`[placeholder="${CSS.escape(c.value)}"]`), hint, validate);
         case 'text': {
           const nodes = [...document.querySelectorAll('button, a, label, span, div, [role="button"]')]
             .filter((n) => (n.innerText || '').trim().slice(0, 60) === c.value);
@@ -109,10 +112,10 @@
           const deepest = pool.filter((n) => !pool.some((m) => m !== n && n.contains(m)));
           return pickVisible(deepest.length ? deepest : pool);
         }
-        case 'css': return choose(document.querySelectorAll(c.value), hint);
+        case 'css': return choose(document.querySelectorAll(c.value), hint, validate);
         case 'href': {
           const v = String(c.value).replace(/"/g, '\\"');
-          return choose(document.querySelectorAll(`a[href="${v}"]`), hint);
+          return choose(document.querySelectorAll(`a[href="${v}"]`), hint, validate);
         }
         default: return null;
       }
@@ -172,7 +175,7 @@
     let seenNotReady = false; // element var ama koşul sağlanmadı (hata mesajı için)
     while (Date.now() < deadline) {
       for (let i = 0; i < sorted.length; i++) {
-        const el = findByCandidate(sorted[i], hint);
+        const el = findByCandidate(sorted[i], hint, validate);
         if (!el || (validate && !validate(el))) continue;
         if (isReady(el, waitFor, action)) {
           return { el, usedIndex: i, strategy: sorted[i].strategy };
