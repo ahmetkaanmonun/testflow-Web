@@ -775,10 +775,16 @@ export default function ScenarioDetail() {
           if (steps[j].action === 'repeat-end') depth = Math.max(0, depth - 1);
         }
         if (step.action === 'repeat-end') depth = Math.max(0, depth - 1);
+        // Koşumda ilk denenecek locator: en yüksek puanlı aday (player da puana göre sıralar).
+        // Önceden listeye ilk eklenen gösteriliyordu; kullanılmayan, düşük puanlı bir
+        // locator kullanılıyormuş gibi görünebiliyordu.
         let firstCandidate = null;
+        let allCandidates = '';
         try {
-          const cands = JSON.parse(step.candidates || '[]');
+          const cands = [...JSON.parse(step.candidates || '[]')].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
           if (cands.length) firstCandidate = `${cands[0].strategy}=${String(cands[0].value).slice(0, 40)}`;
+          allCandidates = cands.map((c, k) =>
+            `${k + 1}. ${c.strategy}=${String(c.value).slice(0, 80)}  (güven: ${Math.round((c.score ?? 0) * 100)}%)`).join('\n');
         } catch {}
         return (
           <div key={step.id || `new-${i}`}>
@@ -1072,7 +1078,12 @@ export default function ScenarioDetail() {
                       en çok {(stat.maxWaitMs / 1000).toFixed(1).replace('.', ',')} sn
                     </span>
                   )}
-                  {firstCandidate && <span style={{ fontSize: 11 }}>locator: {firstCandidate}</span>}
+                  {firstCandidate && (
+                    <span style={{ fontSize: 11, cursor: 'help' }}
+                          title={`Koşumda bu sırayla denenir; biri bulunamazsa sıradakine geçilir:\n${allCandidates}`}>
+                      locator: {firstCandidate}
+                    </span>
+                  )}
                 </div>
               );
             })()}
