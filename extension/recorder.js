@@ -53,7 +53,8 @@
   // aslında EN GÜVENİLMEZ locator'dır — skoru CSS'in de altına düşürülür.
   function looksDynamic(v) {
     if (!v) return false;
-    return /\d{3,}/.test(v) ||                      // 3+ basamaklı sayı bloğu
+    return /\d{3,}/.test(v) ||                      // 3+ basamaklı sayı bloğu (yıl dahil: 2028|6)
+      /\d+\s*[|/.:,;]\s*\d+/.test(v) ||              // birleşik sayısal değer (dönem, tarih: 2028|6, 06/2028)
       /^(ember|react|vue|ng|radix|mui|headlessui)[-_:]/i.test(v) ||
       /^:r[a-z0-9]+:$/i.test(v) ||                   // React useId
       /[0-9a-f]{8}-[0-9a-f]{4}/i.test(v) ||          // uuid parçası
@@ -101,6 +102,9 @@
       if (attrAdded >= 2 || SKIP_ATTR.test(at.name) || !at.value || at.value.length > 40) continue;
       // Uzun, karışık değerler (oturuma özel kod) güvenilmez; kısa sayı/kelime kabul
       if (at.value.length > 12 && /\d/.test(at.value) && /[a-z]/i.test(at.value)) continue;
+      // Kısa saf sayı (formid="6" gibi iş anahtarı) kabul; yıl, dönem, tarih, karışık
+      // kod gibi değişebilen değerler kabul edilmez (örn. "2028|6" başka yılda değişir)
+      if (!/^\d{1,3}$/.test(at.value) && looksDynamic(at.value)) continue;
       const sel = `${el.tagName.toLowerCase()}[${CSS.escape(at.name)}="${CSS.escape(at.value)}"]`;
       if (count(sel) === 1) { candidates.push({ strategy: 'css', value: sel, score: 0.88 }); attrAdded++; }
     }
