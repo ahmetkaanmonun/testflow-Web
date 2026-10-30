@@ -181,6 +181,14 @@ seçtiğiniz setten alınır.
 - Aynı senaryoyu farklı setlerle koşarak farklı verilerle test edebilirsiniz
   (örn. "Geçerli Kullanıcı" seti ile passed, "Yanlış Şifre" seti ile failed)
 
+**Çoğaltma:** Aynı anahtarlarla farklı değerler taşıyan bir set gerekiyorsa
+(örn. başka bir kullanıcıyla giriş yapan "Onaycı Kullanıcı" seti) listede ya da
+editörde **⧉ Çoğalt**'a basın. Kopya, kaydedilmemiş yeni bir set olarak açılır;
+yalnızca farklı olan değerleri değiştirip **Kaydet**'e basın. Anahtar adları aynı
+kaldığı için yeni set, aynı senaryolarla (önkoşul olarak kullanılan Login dahil)
+doğrudan kullanılabilir. Başka bir projeye aktarmak için editördeki
+**Başka projeye kopyala →** listesini kullanın.
+
 ## 6. Ortamlar
 
 **Ortamlar** sayfasında test/staging/prod gibi ortamları ad + baseUrl ile
