@@ -33,6 +33,39 @@ export default function TestData() {
     try { setEntries(JSON.parse(set.entries)); } catch { setEntries([]); }
   };
 
+  // Aynı proje içinde çoğaltma: kopya kaydedilmemiş yeni bir set olarak açılır;
+  // kullanıcı yalnız farklı olan değerleri (örn. başka bir kullanıcının adı/şifresi)
+  // değiştirip kaydeder. Vazgeçilirse hiçbir şey oluşmaz.
+  const uniqueCopyName = (base) => {
+    const names = new Set(sets.map((x) => x.name));
+    let candidate = `${base} (kopya)`;
+    for (let n = 2; names.has(candidate); n++) candidate = `${base} (kopya ${n})`;
+    return candidate;
+  };
+
+  const duplicate = (srcName, srcEntries) => {
+    setSelected({ id: null, duplicatedFrom: srcName });
+    setName(uniqueCopyName(srcName));
+    setEntries(srcEntries.map((e) => ({ ...e })));
+  };
+
+  const duplicateSaved = (set) => {
+    let list = [];
+    try { list = JSON.parse(set.entries); } catch {}
+    duplicate(set.name, list);
+  };
+
+  // Editördeki set çoğaltılırken kaydedilmemiş değişiklikler kopyaya taşınır,
+  // orijinale yazılmaz — kullanıcıya bunu söyle.
+  const duplicateFromEditor = () => {
+    const saved = sets.find((x) => x.id === selected.id);
+    let savedEntries = '[]';
+    try { savedEntries = JSON.stringify(JSON.parse(saved?.entries || '[]')); } catch {}
+    const dirty = !saved || saved.name !== name || savedEntries !== JSON.stringify(entries);
+    if (dirty && !confirm('Kaydedilmemiş değişiklikleriniz kopyaya aktarılacak; orijinal veri seti değişmeyecek. Devam edilsin mi?')) return;
+    duplicate(saved?.name || name, entries);
+  };
+
   const openNew = () => {
     setSelected({ id: null });
     setName('');
@@ -68,7 +101,7 @@ export default function TestData() {
 
       {!selected ? (
         <table>
-          <thead><tr><th>Ad</th><th>Anahtar sayısı</th><th>Güncelleme</th></tr></thead>
+          <thead><tr><th>Ad</th><th>Anahtar sayısı</th><th>Güncelleme</th><th></th></tr></thead>
           <tbody>
             {sets.map((s) => {
               let count = 0;
@@ -78,11 +111,18 @@ export default function TestData() {
                   <td style={{ color: 'var(--accent)' }}>{s.name}</td>
                   <td>{count}</td>
                   <td className="muted">{new Date(s.updatedAt).toLocaleString('tr-TR')}</td>
+                  <td style={{ textAlign: 'right' }}>
+                    <button className="ghost" style={{ fontSize: 12, padding: '2px 10px' }}
+                            title="Aynı anahtarlarla yeni bir veri seti oluştur"
+                            onClick={(ev) => { ev.stopPropagation(); duplicateSaved(s); }}>
+                      ⧉ Çoğalt
+                    </button>
+                  </td>
                 </tr>
               );
             })}
             {sets.length === 0 && (
-              <tr><td colSpan={3} className="muted" style={{ textAlign: 'center', padding: 30 }}>
+              <tr><td colSpan={4} className="muted" style={{ textAlign: 'center', padding: 30 }}>
                 Henüz veri seti yok.
               </td></tr>
             )}
@@ -90,6 +130,14 @@ export default function TestData() {
         </table>
       ) : (
         <div className="card">
+          {selected.duplicatedFrom && (
+            <div className="muted" style={{ fontSize: 13, marginBottom: 10, padding: '8px 12px',
+                                            borderRadius: 6, background: 'var(--accent-soft)' }}>
+              ⧉ <b>{selected.duplicatedFrom}</b> veri setinin kopyası — henüz kaydedilmedi.
+              Farklı olan değerleri değiştirip <b>Kaydet</b>'e basın. Anahtar adları aynı kaldığı sürece
+              bu veri setini aynı senaryolarla kullanabilirsiniz.
+            </div>
+          )}
           <input placeholder="Veri seti adı" value={name}
                  onChange={(e) => setName(e.target.value)} style={{ marginBottom: 14, width: 300 }} />
           {entries.map((e, i) => (
@@ -147,9 +195,15 @@ export default function TestData() {
             </button>
             <div style={{ flex: 1 }} />
             {selected.id && (
+              <button className="ghost" onClick={duplicateFromEditor}
+                      title="Bu projede aynı anahtarlarla yeni bir veri seti oluştur">
+                ⧉ Çoğalt
+              </button>
+            )}
+            {selected.id && (
               <select value="" onChange={(e) => e.target.value && copySet(selected.id, e.target.value)}
-                      style={{ width: 160 }}>
-                <option value="">Kopyala →</option>
+                      style={{ width: 210 }}>
+                <option value="">Başka projeye kopyala →</option>
                 {projects.filter((p) => p.id !== user?.workspaceId).map((p) => (
                   <option key={p.id} value={p.id}>{p.personal ? '👤 ' : '📁 '}{p.name}</option>
                 ))}
