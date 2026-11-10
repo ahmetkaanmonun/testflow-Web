@@ -104,7 +104,7 @@ export default function Scenarios() {
     window.addEventListener('message', onMessage);
 
     // Eklenti var mı? (bridge.js cevap verir)
-    window.postMessage({ type: 'TESTFLOW_PING' }, '*');
+    window.postMessage({ type: 'TESTFLOW_PING' }, window.location.origin);
     const timeout = setTimeout(() => setExtension((v) => (v === null ? false : v)), 1500);
 
     return () => { window.removeEventListener('message', onMessage); clearTimeout(timeout); };
@@ -117,7 +117,7 @@ export default function Scenarios() {
 
     if (newPreIds.length === 0) {
       setRecording('record');
-      window.postMessage({ type: 'TESTFLOW_START_RECORDING', scenarioName: name, startUrl }, '*');
+      window.postMessage({ type: 'TESTFLOW_START_RECORDING', scenarioName: name, startUrl }, window.location.origin);
       return;
     }
 

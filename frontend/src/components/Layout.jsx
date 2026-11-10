@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
+import ExtensionBanner from './ExtensionBanner';
 import { api, getUser, clearAuth, setAuth } from '../lib/api';
 
 const navStyle = ({ isActive }) => ({
@@ -95,6 +96,7 @@ export default function Layout() {
         </div>
       </aside>
       <main style={{ flex: 1, padding: '30px 34px', maxWidth: 1100 }}>
+        <ExtensionBanner />
         <Outlet />
       </main>
     </div>

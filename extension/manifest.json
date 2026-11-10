@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "TestFlow Recorder",
-  "version": "0.13.1",
+  "version": "0.14.0",
   "description": "TestFlow için web test kayıt ve koşum eklentisi (Chrome & Edge)",
   "permissions": [
     "tabs",
@@ -19,7 +19,9 @@
     {
       "matches": [
         "http://localhost:5173/*",
-        "http://127.0.0.1:5173/*"
+        "http://127.0.0.1:5173/*",
+        "https://testflow-test.jcrer.com.tr/*",
+        "https://testflow.jcrer.com.tr/*"
       ],
       "js": [
         "bridge.js"
