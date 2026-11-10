@@ -70,6 +70,21 @@ Uygulama açılışta şemayı doğrular (`ddl-auto=validate`) ve şemayı kendi
 değiştirmez; tablolar entity'lerle uyuşmazsa açılmaz ve günlükte hangi kolonun
 uyuşmadığını yazar.
 
+## Mevcut verilerin taşınması
+
+Script'ler boş tablolar oluşturur. Eski sistemdeki (H2) senaryoları taşımak için:
+
+1. **Eski sistemde:** TestFlow → **Aktarım** → "Üyesi olduğum tüm projeler" →
+   **⬇ Dışa aktar**. Ortak projelerde içeriğin tamamı için, o projelerin
+   üyesi olan bir kullanıcıyla yapın.
+2. **Yeni sunucuda:** Uygulamayı `postgres` profiliyle başlatın, AD hesabınızla
+   giriş yapın (ilk girişte kişisel alanınız oluşur).
+3. **Aktarım** → **📄 Dosya seç** → önizlemeyi kontrol edin → **⬆ İçe aktar**.
+4. Kullanıcı adları değiştiyse **Proje Üyeleri** sayfasından üyelikleri
+   güncelleyin. Birkaç senaryoyu koşup sonuçları doğrulayın.
+5. Dışa aktarma dosyası şifre içerdiği için işiniz bitince silin. Eski H2
+   veritabanı dosyasını (`backend/data/`) bir süre yedek olarak saklayın.
+
 ## Notlar
 
 - **Kullanıcılar veritabanında tutulmaz;** kimlik doğrulama LDAP/Active

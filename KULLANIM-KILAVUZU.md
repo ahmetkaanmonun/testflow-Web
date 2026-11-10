@@ -261,7 +261,36 @@ Giriş sayfası son 7 günün özetini verir: koşum sayısı, başarı oranı
 (renk kodlu), iyileşen adım sayısı, en çok kırılan senaryolar (bakım
 önceliği listesi) ve son koşumlar.
 
-## 11. Sık Karşılaşılan Durumlar
+## 11. Aktarım (Taşıma ve Yedekleme)
+
+**Aktarım** sayfasından projelerinizi tek bir dosyaya aktarıp başka bir TestFlow
+sunucusuna (ya da aynı sunucuya) geri yükleyebilirsiniz.
+
+**Dışa aktar:** "Üyesi olduğum tüm projeler" ya da "Yalnızca açık olan proje"
+seçip **⬇ Dışa aktar**'a basın. Dosyada üyeler, klasörler, ortamlar, test veri
+setleri ve senaryolar (adımlarıyla) bulunur. Koşum geçmişi isteğe bağlıdır;
+ekran görüntüleri yüzünden dosyayı çok büyütür, taşımada genellikle gerekmez.
+
+> ⚠ Dosya, test veri setlerindeki **şifreler dahil** tüm değerleri içerir.
+> Güvenli bir yerde saklayın, paylaşmayın, işiniz bitince silin.
+
+**İçe aktar:** **📄 Dosya seç** ile dosyayı seçin; önizlemede hangi projelerin
+ne kadar içerikle aktarılacağı görünür. **⬆ İçe aktar** ile onaylayın.
+
+- Mevcut verileriniz **silinmez veya değiştirilmez**; içerik yeni kayıtlar olarak
+  eklenir. Aynı dosyayı iki kez içe aktarırsanız içerik iki kez eklenir.
+- **Kişisel alan** içeriği, içe aktaran kişinin kişisel alanına aktarılır.
+- **Ortak projeler** üyeleriyle birlikte yeni proje olarak oluşturulur; aynı adla
+  bir projeniz varsa adına "(içe aktarılan)" eklenir. İçe aktaran kişi her zaman
+  üye olur.
+- Önkoşul bağlantıları, klasör atamaları ve tarihler korunur.
+- Bir hata olursa **hiçbir şey kaydedilmez**.
+
+**Kullanıcı adları:** Üyelikler kullanıcı adıyla taşınır. Yeni sunucudaki
+kullanıcı adları (örn. Active Directory hesapları) eskilerinden farklıysa, içe
+aktarmadan sonra **Proje Üyeleri** sayfasından üyelikleri güncelleyin.
+
+## 12. Sık Karşılaşılan Durumlar
 
 **"Kaydı Başlat düğmesi pasif"** → Eklenti kurulu/güncel değil. §2'yi
 uygulayın, sayfayı yenileyin, sağ üstte sürüm yazısını doğrulayın.

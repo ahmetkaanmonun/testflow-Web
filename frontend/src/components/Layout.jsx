@@ -86,6 +86,7 @@ export default function Layout() {
           <NavLink to="/environments" style={navStyle}>Ortamlar</NavLink>
           <NavLink to="/runs" style={navStyle}>Koşumlar</NavLink>
           <NavLink to="/project" style={navStyle}>Proje Üyeleri</NavLink>
+          <NavLink to="/transfer" style={navStyle}>Aktarım</NavLink>
           <NavLink to="/help" style={navStyle}>Yardım</NavLink>
         </nav>
         <div style={{ borderTop: '1px solid var(--border)', paddingTop: 14, padding: '14px 6px 0' }}>
