@@ -3,11 +3,12 @@
 --
 -- Kim çalıştırır : DBA (süper kullanıcı, örn. postgres)
 -- Nereye bağlıyken: "postgres" veritabanı
--- Gereksinim     : PostgreSQL 16 veya üzeri, ICU desteği (resmi kurulumlarda var)
+-- Gereksinim     : PostgreSQL 16 veya üzeri, ICU desteği (resmî kurulumlarda bulunur)
 --
--- ÇALIŞTIRMADAN ÖNCE: aşağıdaki şifreyi değiştirin. Şifreyi bu dosyaya yazıp
--- paylaşmayın/Git'e eklemeyin; değiştirdikten sonra dosyayı kaydetmeden
--- çalıştırmak ya da ALTER ROLE ile sonradan atamak daha güvenlidir.
+-- ÇALIŞTIRMADAN ÖNCE: Aşağıdaki şifreyi değiştirin. Test ve canlı ortam için
+-- farklı şifreler kullanın. Dosyanın şifre yazılmış hâlini paylaşmayın ve Git'e
+-- eklemeyin; dosyayı kaydetmeden çalıştırmak ya da şifreyi sonradan ALTER ROLE
+-- ile atamak daha güvenlidir.
 -- =============================================================================
 
 -- Uygulamanın bağlanacağı rol. Şema sahibi olacağı için tablo oluşturup
