@@ -157,10 +157,10 @@ export async function saveRun({ scenarioId, environmentId = null, testDataSetId 
  * prepared.steps yalnızca oynatılacak ön adımları içermeli.
  */
 export function postStartRecordFrom({ startUrl, steps, runConfig }, insertContext) {
-  window.postMessage({ type: 'TESTFLOW_START_RECORD_FROM', startUrl, steps, runConfig, insertContext }, '*');
+  window.postMessage({ type: 'TESTFLOW_START_RECORD_FROM', startUrl, steps, runConfig, insertContext }, window.location.origin);
 }
 
 /** Eklentiye koşum başlat mesajı. */
 export function postStartRun({ startUrl, steps, runConfig }, runContext) {
-  window.postMessage({ type: 'TESTFLOW_START_RUN', startUrl, steps, runConfig, runContext }, '*');
+  window.postMessage({ type: 'TESTFLOW_START_RUN', startUrl, steps, runConfig, runContext }, window.location.origin);
 }

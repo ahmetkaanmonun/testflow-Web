@@ -26,12 +26,24 @@ Kayıt ve koşum, Chrome/Edge eklentisiyle yapılır.
 1. `chrome://extensions` (Edge: `edge://extensions`) adresini açın
 2. Sağ üstten **Geliştirici modu**nu açın
 3. **Paketlenmemiş öğe yükle** → repodaki `extension/` klasörünü seçin
-4. **Ayrıntılar → Gizli modda izin ver** anahtarını açın (önerilir — bkz. §7)
+4. **Ayrıntılar → Gizli modda izin ver** (Edge'de **InPrivate'te izin ver**)
+   anahtarını açın. **Önemlidir:** kapalıysa testler normal pencerede çalışır ve
+   test edilen sitedeki kendi oturumunuz kapanır (bkz. §7). İzin kapalıyken
+   TestFlow sayfalarının üstünde bir uyarı görünür.
 5. TestFlow sekmesini yenileyin — Senaryolar sayfasının sağ üstünde
    **Eklenti vX.X.X** yazısı görünmelidir
 
 > Eklenti güncellendiğinde `chrome://extensions` sayfasından 🔄 **yenile**
 > yapmayı unutmayın; sürüm numarası arayüzdekiyle eşleşmelidir.
+>
+> Eklenti yüklü değilse, sürümü TestFlow'un istediğinden eskiyse ya da gizli
+> mod izni yoksa, TestFlow sayfalarının üstünde ne yapılması gerektiğini
+> anlatan bir uyarı bandı görünür.
+>
+> Eklenti yalnızca tanıdığı TestFlow adreslerinde çalışır: geliştirme için
+> `localhost:5173`, sunucular için `testflow-test.jcrer.com.tr` ve
+> `testflow.jcrer.com.tr` (`extension/manifest.json` → `content_scripts`).
+> Sunucu adresi değişirse eklentinin de güncellenmesi gerekir.
 
 ## 3. Senaryo Kaydetme
 

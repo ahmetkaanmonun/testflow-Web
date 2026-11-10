@@ -66,6 +66,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 });
 
 async function handle(msg, sender) {
+  // Web uygulaması uyarı bandı için: gizli mod izni var mı?
+  // (İzin yoksa koşumlar normal pencerede açılır ve test edilen sitenin çerezleri
+  //  temizlenir — kullanıcı aynı sitedeki kendi oturumundan çıkar.)
+  if (msg.type === 'GET_EXTENSION_STATUS') {
+    return { incognitoAllowed: await chrome.extension.isAllowedIncognitoAccess() };
+  }
+
   // ===== KAYIT =====
   if (msg.type === 'START_RECORDING') {
     // Koşumla simetri: kayıt da (izin varsa) gizli pencerede, temiz oturumla.

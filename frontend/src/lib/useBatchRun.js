@@ -21,7 +21,7 @@ export function useBatchRun() {
       }
     };
     window.addEventListener('message', onMessage);
-    window.postMessage({ type: 'TESTFLOW_PING' }, '*');
+    window.postMessage({ type: 'TESTFLOW_PING' }, window.location.origin);
     const timeout = setTimeout(() => setExtension((v) => (v === null ? false : v)), 1500);
     return () => { window.removeEventListener('message', onMessage); clearTimeout(timeout); };
   }, []);
