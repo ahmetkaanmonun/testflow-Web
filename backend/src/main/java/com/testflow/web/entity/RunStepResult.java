@@ -54,6 +54,7 @@ public class RunStepResult {
     private Instant finishedAt;
 
     /** Adım anındaki ekran görüntüsü — data URL (jpeg base64). */
-    @Column(columnDefinition = "CLOB")
+    // TEXT: H2'de CLOB'a karşılık gelir, PostgreSQL'de de geçerlidir ("CLOB" PostgreSQL'de yok)
+    @Column(columnDefinition = "TEXT")
     private String screenshot;
 }
